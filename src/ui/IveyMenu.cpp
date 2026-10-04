@@ -1,1 +1,823 @@
+#include "IveyMenu.hpp"
+#include "../bot/Bot.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
 
+using namespace geode::prelude;
+
+namespace ivey {
+
+    static IveyMenu* s_instance = nullptr;
+
+    namespace {
+        constexpr float W = 350.f;
+        constexpr float H = 290.f;
+        constexpr float TITLE_H = 22.f;
+        constexpr float TAB_H = 20.f;
+        constexpr float TAB_ROW_H = 18.f;
+        constexpr float ROW_H = 20.f;
+
+        // Tab ids. The Search tab only exists after the Search button is used.
+        constexpr int TAB_MACRO = 2;
+        constexpr int TAB_TRAJECTORY = 8;
+        constexpr int TAB_SEARCH = 9;
+        const char* TAB_NAMES[] = {"Gameplay", "Bot", "Macro", "Physics", "Presets", "Visual",
+                                   "Theme", "Labels", "Trajectory", "Search"};
+
+        std::vector<int> tabOrder(bool searchOpen) {
+            std::vector<int> order = {0, TAB_TRAJECTORY, 1, TAB_MACRO};
+            if (searchOpen) order.push_back(TAB_SEARCH);
+            for (int id : {3, 4, 5, 6, 7}) order.push_back(id);
+            return order;
+        }
+
+        constexpr int ACCENT_COUNT = 5;
+        const char* ACCENT_NAMES[ACCENT_COUNT] = {"Blue", "Green", "Pink", "Purple", "Orange"};
+        const ccColor3B ACCENTS[ACCENT_COUNT] = {
+            {74, 158, 255}, {124, 240, 124}, {255, 107, 157}, {179, 124, 255}, {255, 179, 71}
+        };
+
+        constexpr int OPACITY_COUNT = 3;
+        const GLubyte OPACITIES[OPACITY_COUNT] = {170, 210, 245};
+
+        float T() { return 0.42f * fontScale(); }
+
+        ccColor3B accentColor() {
+            int i = Bot::get().cfg.accent;
+            return ACCENTS[((i % ACCENT_COUNT) + ACCENT_COUNT) % ACCENT_COUNT];
+        }
+
+        std::string lower(std::string v) {
+            std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return v;
+        }
+
+        // Macros whose name contains the text, newest first.
+        std::vector<std::filesystem::path> searchHits(Bot& bot, std::string const& query) {
+            bot.refreshFiles();
+            std::string q = lower(query);
+
+            std::vector<std::filesystem::path> hits;
+            for (auto const& f : bot.files) {
+                if (q.empty() || lower(f.stem().string()).find(q) != std::string::npos) hits.push_back(f);
+            }
+            std::sort(hits.begin(), hits.end(), [](auto const& x, auto const& y) {
+                std::error_code e1, e2;
+                return std::filesystem::last_write_time(x, e1) > std::filesystem::last_write_time(y, e2);
+            });
+            return hits;
+        }
+
+        void macroRow(std::vector<MenuRow>& r, std::filesystem::path const& path) {
+            std::string file = path.filename().string();
+            std::string name = path.extension() == ".ivey" ? path.stem().string() : file;
+            r.push_back(MenuRow{
+                name, nullptr, nullptr, [file] { Bot::get().loadByName(file); },
+                [file] { return Bot::get().loadedName == file ? std::string("loaded") : std::string(); }
+            });
+        }
+
+        bool touchInside(geode::TextInput* input, CCTouch* touch) {
+            if (!input || !input->getParent()) return false;
+            auto p = input->getParent()->convertToNodeSpace(touch->getLocation());
+            return input->boundingBox().containsPoint(p);
+        }
+
+        std::vector<MenuRow> rowsFor(int tab, std::string const& query) {
+            auto& b = Bot::get();
+            auto& c = b.cfg;
+            std::vector<MenuRow> r;
+
+            auto check = [&r](std::string label, bool& flag, std::function<void()> arrow = nullptr,
+                              std::function<std::string()> detail = nullptr) {
+                r.push_back(MenuRow{
+                    std::move(label),
+                    [&flag] { return flag; },
+                    [&flag](bool v) { flag = v; Bot::get().cfg.save(); },
+                    std::move(arrow),
+                    std::move(detail)
+                });
+            };
+            auto action = [&r](std::string label, std::function<void()> fn,
+                               std::function<std::string()> detail = nullptr) {
+                r.push_back(MenuRow{std::move(label), nullptr, nullptr, std::move(fn), std::move(detail)});
+            };
+
+            auto tpsValue = [] { return std::to_string(Bot::get().cfg.tps); };
+            auto setTps = [](double v) {
+                if (Bot::get().tpsLocked()) {
+                    Bot::get().status = "TPS is locked while botting";
+                    return;
+                }
+                auto& cfg = Bot::get().cfg;
+                cfg.tps = static_cast<int>(std::lround(v));
+                cfg.save();
+                Bot::get().leftOver = 0.f;
+                Bot::get().status = fmt::format("TPS set to {}", cfg.tps);
+            };
+            auto editable = [&r](std::string title, std::function<std::string()> cur, double lo, double hi,
+                                 std::function<void(double)> apply) {
+                auto& row = r.back();
+                row.editTitle = std::move(title);
+                row.editValue = std::move(cur);
+                row.editMin = lo;
+                row.editMax = hi;
+                row.editApply = std::move(apply);
+            };
+            auto tpsText = [] { return fmt::format("{} TPS", Bot::get().cfg.tps); };
+
+            switch (tab) {
+                case 0: { // Gameplay
+                    check("Noclip", c.noclip);
+                    check("Noclip P1", c.noclipP1);
+                    check("Noclip P2", c.noclipP2);
+                    check("Instant Respawn", c.instantRespawn);
+                    r.push_back(MenuRow{
+                        "Frame Stepper",
+                        [] { return Bot::get().cfg.stepper; },
+                        [](bool v) {
+                            auto& bot = Bot::get();
+                            bot.cfg.stepper = v;
+                            bot.stepsPending = 0;
+                            bot.status = v ? "Stepper on, use the step buttons" : "Stepper off";
+                        },
+                        nullptr, nullptr
+                    });
+                    action("Step Frame", [] { Bot::get().stepsPending += 1; });
+                    check("Swift Clicks", c.swift, nullptr,
+                          [] { return fmt::format("{} per frame", Bot::get().cfg.swiftClicks); });
+                    editable("Clicks per frame", [] { return std::to_string(Bot::get().cfg.swiftClicks); }, 1, 100,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.swiftClicks = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("{} clicks per frame", cfg.swiftClicks);
+                             });
+                    check("Smart Swift", c.swiftSmart);
+                    check("Auto Safe Mode", c.autoSafe);
+                    break;
+                }
+                case 1: { // Bot
+                    r.push_back(MenuRow{
+                        "Frame Accurate",
+                        [] { return Bot::get().cfg.frameAccurate; },
+                        [](bool v) {
+                            auto& bot = Bot::get();
+                            if (bot.tpsLocked()) {
+                                bot.status = "TPS is locked while botting";
+                                return;
+                            }
+                            bot.cfg.frameAccurate = v;
+                            bot.cfg.save();
+                            bot.leftOver = 0.f;
+                        },
+                        nullptr, tpsText
+                    });
+                    editable("TPS", tpsValue, 1, 65535, setTps);
+                    check("Position Correction", c.correction, nullptr,
+                          [] { return fmt::format("every {}f", Bot::get().cfg.corrInterval); });
+                    editable("Check every (frames)", [] { return std::to_string(Bot::get().cfg.corrInterval); }, 1, 10000,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.corrInterval = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Checks every {} frames", cfg.corrInterval);
+                             });
+                    r.push_back(MenuRow{
+                        "Record",
+                        [] { return Bot::get().mode == Mode::Record; },
+                        [](bool v) { Bot::get().setMode(v ? Mode::Record : Mode::Idle); },
+                        nullptr, nullptr
+                    });
+                    r.push_back(MenuRow{
+                        "Replay",
+                        [] { return Bot::get().mode == Mode::Replay; },
+                        [](bool v) { Bot::get().setMode(v ? Mode::Replay : Mode::Idle); },
+                        nullptr, nullptr
+                    });
+                    check("Ignore Inputs On Replay", c.ignoreInputs);
+                    check("Auto Save On Complete", c.autoSave);
+                    check("Fixed Seed", c.fixedSeed);
+                    action("Clear Macro", [] { Bot::get().clear(); },
+                           [] { return fmt::format("{} inputs", Bot::get().macro.entries.size()); });
+                    break;
+                }
+                case 2: { // Macro
+                    action("Search macros...", [] { if (auto m = IveyMenu::get()) m->openSearch(); });
+                    r.back().box = true;
+
+                    action("Save Macro", [] { Bot::get().save(); });
+                    action("Delete Loaded", [] { Bot::get().deleteSelected(); });
+                    action("Open Folder", [] { geode::utils::file::openFolder(Bot::get().dir()); });
+                    break;
+                }
+                case 3: { // Physics
+                    check("Speedhack", c.speedhack, nullptr,
+                          [] { return fmt::format("x{:g}", Bot::get().cfg.speed); });
+                    editable("Speed", [] { return fmt::format("{:g}", Bot::get().cfg.speed); }, 0.01, 1000.0,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.speed = static_cast<float>(v);
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Speed set to x{:g}", cfg.speed);
+                             });
+                    check("Speedhack Audio", c.speedAudio);
+                    action("Accuracy Steps", nullptr, tpsText);
+                    editable("TPS", tpsValue, 1, 65535, setTps);
+                    action("Step Budget", nullptr, [] { return fmt::format("{} ms", Bot::get().cfg.stepBudget); });
+                    editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 100,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.stepBudget = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Step budget {} ms", cfg.stepBudget);
+                             });
+                    action("Wave Checks", nullptr, [] { return fmt::format("every {}f", Bot::get().cfg.waveInterval); });
+                    editable("Wave check every (frames)", [] { return std::to_string(Bot::get().cfg.waveInterval); }, 1, 10000,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.waveInterval = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Wave checks every {} frames", cfg.waveInterval);
+                             });
+                    break;
+                }
+                case 4: { // Presets
+                    for (int k = 0; k < Bot::presetCount(); ++k) {
+                        action(Bot::presetName(k), [k] { Bot::get().applyPreset(k); },
+                               [k] { return Bot::get().presetActive(k) ? std::string("active") : std::string(); });
+                    }
+                    break;
+                }
+                case 5: { // Visual
+                    check("Show Overlay", c.showOverlay);
+                    check("Menu Button", c.menuButton);
+                    break;
+                }
+                case 6: { // Theme
+                    action("Accent Color", [] {
+                        auto& cfg = Bot::get().cfg;
+                        cfg.accent = (cfg.accent + 1) % ACCENT_COUNT;
+                        cfg.save();
+                    }, [] { return std::string(ACCENT_NAMES[Bot::get().cfg.accent % ACCENT_COUNT]); });
+                    action("Window Opacity", [] {
+                        auto& cfg = Bot::get().cfg;
+                        cfg.opacity = (cfg.opacity + 1) % OPACITY_COUNT;
+                        cfg.save();
+                    }, [] { return fmt::format("{}", OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]); });
+                    break;
+                }
+                case 7: { // Labels
+                    check("Frame", c.lblFrame);
+                    check("Mode", c.lblMode);
+                    check("Macro", c.lblMacro);
+                    check("Accuracy", c.lblAccuracy);
+                    break;
+                }
+                case 8: { // Trajectory
+                    check("Show Trajectory", c.trajectory, nullptr,
+                          [] { return fmt::format("{}f", Bot::get().cfg.trajectoryLength); });
+                    editable("Length (frames)", [] { return std::to_string(Bot::get().cfg.trajectoryLength); }, 2, 2000,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.trajectoryLength = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Trajectory {} frames", cfg.trajectoryLength);
+                             });
+                    check("Release Line", c.trajectoryRelease);
+                    r.push_back(MenuRow{"Green = hold, red = release", nullptr, nullptr, nullptr, nullptr});
+                    r.push_back(MenuRow{"Runs do not count while it is on", nullptr, nullptr, nullptr, nullptr});
+                    break;
+                }
+                case 9: { // Search
+                    auto hits = searchHits(b, query);
+                    constexpr size_t MAX_ROWS = 7;
+                    size_t shown = hits.size() > MAX_ROWS ? MAX_ROWS - 1 : hits.size();
+
+                    for (size_t k = 0; k < shown; ++k) macroRow(r, hits[k]);
+
+                    if (hits.empty()) {
+                        r.push_back(MenuRow{query.empty() ? "No macros yet" : "No macros found", nullptr, nullptr, nullptr, nullptr});
+                    }
+                    else if (hits.size() > MAX_ROWS) {
+                        r.push_back(MenuRow{fmt::format("+{} more, keep typing", hits.size() - shown), nullptr, nullptr, nullptr, nullptr});
+                    }
+                    break;
+                }
+                default: break;
+            }
+            return r;
+        }
+    }
+
+    std::string const& fontName() {
+        static std::string name = [] {
+            std::string abel = std::string("abel.fnt"_spr);
+            auto utils = CCFileUtils::get();
+            if (utils->isFileExist(abel.c_str())) return abel;
+            std::string full = utils->fullPathForFilename(abel.c_str(), false);
+            if (full != abel && utils->isFileExist(full.c_str())) return abel;
+            return std::string("chatFont.fnt");
+        }();
+        return name;
+    }
+
+    // Matches Abel's height to chatFont's, so the sizes stay right
+    // no matter how the generated font was scaled.
+    float fontScale() {
+        static float scale = [] {
+            if (fontName() == "chatFont.fnt") return 1.f;
+
+            auto abel = CCLabelBMFont::create("Ag", fontName().c_str());
+            auto base = CCLabelBMFont::create("Ag", "chatFont.fnt");
+            if (!abel || !base) return 1.f;
+
+            float ah = abel->getContentSize().height;
+            float bh = base->getContentSize().height;
+            if (ah <= 0.f || bh <= 0.f) return 1.f;
+
+            return std::clamp(bh / ah * 1.15f, 0.01f, 4.f);
+        }();
+        return scale;
+    }
+
+    // Abel is narrow, so it is stretched sideways a little.
+    float fontWidth() {
+        return fontName() == "chatFont.fnt" ? 1.f : 1.3f;
+    }
+
+    void styleText(CCLabelBMFont* label, float scale) {
+        label->setScaleY(scale * fontScale());
+        label->setScaleX(scale * fontScale() * fontWidth());
+    }
+
+    IveyMenu* IveyMenu::get() { return s_instance; }
+
+    IveyMenu* IveyMenu::create() {
+        auto ret = new IveyMenu();
+        if (ret && ret->init()) {
+            ret->autorelease();
+            return ret;
+        }
+        CC_SAFE_DELETE(ret);
+        return nullptr;
+    }
+
+    void IveyMenu::toggle() {
+        if (s_instance) {
+            s_instance->removeFromParentAndCleanup(true);
+            return;
+        }
+        auto scene = CCDirector::get()->getRunningScene();
+        if (!scene) return;
+        if (auto menu = IveyMenu::create()) scene->addChild(menu, 100000);
+    }
+
+    IveyMenu::~IveyMenu() {
+        if (s_instance == this) s_instance = nullptr;
+    }
+
+    void IveyMenu::registerWithTouchDispatcher() {
+        CCDirector::get()->getTouchDispatcher()->addTargetedDelegate(this, -500, true);
+    }
+
+    bool IveyMenu::ccTouchBegan(CCTouch* touch, CCEvent*) {
+        if (!m_root) return false;
+        if (m_editor && touchInside(m_input, touch)) return false;
+        if (m_searchHolder && touchInside(m_search, touch)) return false;
+        // Only swallow touches on the window, the game stays playable around it.
+        auto local = m_root->convertToNodeSpace(touch->getLocation());
+        return CCRect(0.f, 0.f, W, H).containsPoint(local);
+    }
+
+    void IveyMenu::keyBackClicked() {
+        this->removeFromParentAndCleanup(true);
+    }
+
+    bool IveyMenu::init() {
+        if (!CCLayer::init()) return false;
+        s_instance = this;
+
+        this->setTouchEnabled(true);
+        this->setKeypadEnabled(true);
+
+        auto win = CCDirector::get()->getWinSize();
+
+        m_root = CCNode::create();
+        m_root->setPosition({24.f, win.height - 24.f - H});
+        this->addChild(m_root);
+
+        m_bg = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
+        m_bg->setAnchorPoint({0.f, 0.f});
+        m_bg->setContentSize({W, H});
+        m_bg->setColor({22, 22, 22});
+        m_root->addChild(m_bg);
+
+        auto titleBar = CCLayerColor::create({40, 40, 40, 255}, W - 8.f, TITLE_H - 4.f);
+        titleBar->setPosition({4.f, H - TITLE_H});
+        m_root->addChild(titleBar);
+
+        auto title = CCLabelBMFont::create("Ivey Bot", fontName().c_str());
+        styleText(title, 0.45f);
+        title->setColor({230, 230, 230});
+        title->setPosition({W / 2.f, H - TITLE_H / 2.f - 2.f});
+        m_root->addChild(title, 2);
+
+        m_tabMenu = CCMenu::create();
+        m_tabMenu->setPosition({0.f, 0.f});
+        m_tabMenu->setTouchPriority(-501);
+        m_root->addChild(m_tabMenu, 3);
+
+        m_content = CCMenu::create();
+        m_content->setPosition({0.f, 0.f});
+        m_content->setTouchPriority(-501);
+        m_root->addChild(m_content, 3);
+
+        m_status = CCLabelBMFont::create("", fontName().c_str());
+        styleText(m_status, 0.38f);
+        m_status->setAnchorPoint({0.f, 0.5f});
+        m_status->setColor({150, 150, 150});
+        m_status->setPosition({10.f, 12.f});
+        m_root->addChild(m_status, 2);
+
+        applyTheme();
+        this->schedule(schedule_selector(IveyMenu::sync), 0.1f);
+        return true;
+    }
+
+    void IveyMenu::applyTheme() {
+        m_bg->setOpacity(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]);
+    }
+
+    void IveyMenu::rebuildTabs() {
+        m_tabMenu->removeAllChildrenWithCleanup(true);
+
+        float x = 8.f;
+        int row = 0;
+        float y0 = H - TITLE_H - TAB_H / 2.f - 2.f;
+
+        // Reserves room for a tab, moving to the next line when it does not fit.
+        auto reserve = [&](float width) {
+            if (x + width > W - 8.f && x > 8.f) {
+                x = 8.f;
+                ++row;
+            }
+            float start = x;
+            x += width + 1.f;
+            return start;
+        };
+
+        for (int id : tabOrder(m_searchOpen)) {
+            auto lbl = CCLabelBMFont::create(TAB_NAMES[id], fontName().c_str());
+            styleText(lbl, 0.42f);
+            float w = lbl->getContentSize().width * T() * fontWidth() + 8.f;
+            float closeW = id == TAB_SEARCH ? 14.f : 0.f;
+
+            float start = reserve(w + (closeW > 0.f ? closeW + 1.f : 0.f));
+            float y = y0 - static_cast<float>(row) * TAB_ROW_H;
+
+            auto node = CCNode::create();
+            node->setContentSize({w, 16.f});
+            node->setAnchorPoint({0.5f, 0.5f});
+
+            if (id == m_tab) {
+                auto hl = CCLayerColor::create({62, 62, 62, 255}, w, 16.f);
+                node->addChild(hl);
+                lbl->setColor(accentColor());
+            }
+            else {
+                lbl->setColor({200, 200, 200});
+            }
+            lbl->setPosition({w / 2.f, 8.f});
+            node->addChild(lbl, 1);
+
+            auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(IveyMenu::onTab));
+            item->m_scaleMultiplier = 1.f;
+            item->setTag(id);
+            item->setPosition({start + w / 2.f, y});
+            m_tabMenu->addChild(item);
+
+            if (id == TAB_SEARCH) {
+                // the Search tab's own close button
+                auto xNode = CCNode::create();
+                xNode->setContentSize({closeW, 16.f});
+                xNode->setAnchorPoint({0.5f, 0.5f});
+                xNode->addChild(CCLayerColor::create({62, 62, 62, 255}, closeW, 16.f));
+                auto xl = CCLabelBMFont::create("x", fontName().c_str());
+                styleText(xl, 0.42f);
+                xl->setColor({255, 140, 140});
+                xl->setPosition({closeW / 2.f, 8.f});
+                xNode->addChild(xl, 1);
+
+                auto xItem = CCMenuItemSpriteExtra::create(xNode, nullptr, this, menu_selector(IveyMenu::onCloseSearch));
+                xItem->m_scaleMultiplier = 1.f;
+                xItem->setPosition({start + w + 1.f + closeW / 2.f, y});
+                m_tabMenu->addChild(xItem);
+            }
+        }
+        m_tabRows = row + 1;
+
+        // close button
+        auto closeNode = CCNode::create();
+        closeNode->setContentSize({18.f, 18.f});
+        closeNode->setAnchorPoint({0.5f, 0.5f});
+        auto x1 = CCLabelBMFont::create("x", fontName().c_str());
+        styleText(x1, 0.55f);
+        x1->setColor({220, 220, 220});
+        x1->setPosition({9.f, 9.f});
+        closeNode->addChild(x1);
+        auto closeItem = CCMenuItemSpriteExtra::create(closeNode, nullptr, this, menu_selector(IveyMenu::onClose));
+        closeItem->setPosition({W - 18.f, H - TITLE_H / 2.f - 2.f});
+        m_tabMenu->addChild(closeItem);
+    }
+
+    void IveyMenu::rebuild() {
+        m_content->removeAllChildrenWithCleanup(true);
+        showSearch(m_tab == TAB_SEARCH);
+        m_rows = rowsFor(m_tab, m_query);
+
+        float rowW = W - 44.f;
+        float y = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f - ROW_H / 2.f;
+        if (m_tab == TAB_SEARCH) y -= 24.f; // room for the search box
+
+        for (size_t i = 0; i < m_rows.size(); ++i) {
+            auto& row = m_rows[i];
+            bool hasCheck = static_cast<bool>(row.get);
+
+            auto holder = CCNode::create();
+            holder->setContentSize({rowW, ROW_H - 2.f});
+            holder->setAnchorPoint({0.5f, 0.5f});
+
+            if (row.box) {
+                holder->addChild(CCLayerColor::create({40, 40, 40, 255}, rowW, ROW_H - 2.f));
+            }
+
+            if (hasCheck) {
+                auto box = CCNode::create();
+                box->setContentSize({14.f, 14.f});
+                auto bg = CCLayerColor::create({48, 48, 48, 255}, 14.f, 14.f);
+                box->addChild(bg);
+                if (row.get()) {
+                    auto fill = CCLayerColor::create({accentColor().r, accentColor().g, accentColor().b, 255}, 8.f, 8.f);
+                    fill->setPosition({3.f, 3.f});
+                    box->addChild(fill);
+                }
+                box->setPosition({4.f, (ROW_H - 2.f) / 2.f - 7.f});
+                holder->addChild(box);
+            }
+
+            std::string text = row.label;
+            if (row.detail) text += "  " + row.detail();
+
+            auto lbl = CCLabelBMFont::create(text.c_str(), fontName().c_str());
+            styleText(lbl, 0.42f);
+            lbl->setAnchorPoint({0.f, 0.5f});
+            lbl->setColor({225, 225, 225});
+            lbl->setPosition({hasCheck ? 24.f : (row.box ? 10.f : 4.f), (ROW_H - 2.f) / 2.f});
+            holder->addChild(lbl);
+
+            auto item = CCMenuItemSpriteExtra::create(holder, nullptr, this, menu_selector(IveyMenu::onRow));
+            item->m_scaleMultiplier = 1.f;
+            item->setTag(static_cast<int>(i));
+            item->setPosition({10.f + rowW / 2.f, y});
+            m_content->addChild(item);
+
+            if (row.arrow || row.editApply) {
+                auto arrowNode = CCNode::create();
+                arrowNode->setContentSize({18.f, 18.f});
+                arrowNode->setAnchorPoint({0.5f, 0.5f});
+                auto a = CCLabelBMFont::create(">", fontName().c_str());
+                styleText(a, 0.6f);
+                a->setColor(accentColor());
+                a->setPosition({9.f, 9.f});
+                arrowNode->addChild(a);
+
+                auto arrowItem = CCMenuItemSpriteExtra::create(arrowNode, nullptr, this, menu_selector(IveyMenu::onArrow));
+                arrowItem->setTag(static_cast<int>(i));
+                arrowItem->setPosition({W - 18.f, y});
+                m_content->addChild(arrowItem);
+            }
+
+            y -= ROW_H;
+        }
+    }
+
+    void IveyMenu::sync(float) {
+        auto& bot = Bot::get();
+
+        if (m_editClose) {
+            m_editClose = false;
+            closeEditor();
+        }
+
+        std::string snap;
+        for (auto& r : m_rows) {
+            snap += r.get ? (r.get() ? '1' : '0') : '-';
+            if (r.detail) snap += r.detail();
+            snap += '|';
+        }
+        snap += std::to_string(bot.cfg.accent) + "," + std::to_string(bot.cfg.opacity);
+        snap += "?" + m_query + "|" + bot.loadedName;
+
+        if (m_dirty || snap != m_snap) {
+            bool first = m_dirty;
+            m_dirty = false;
+            applyTheme();
+            rebuildTabs();
+            rebuild();
+
+            // snapshot of the rebuilt rows
+            std::string s2;
+            for (auto& r : m_rows) {
+                s2 += r.get ? (r.get() ? '1' : '0') : '-';
+                if (r.detail) s2 += r.detail();
+                s2 += '|';
+            }
+            s2 += std::to_string(bot.cfg.accent) + "," + std::to_string(bot.cfg.opacity);
+            s2 += "?" + m_query + "|" + bot.loadedName;
+            m_snap = s2;
+            (void)first;
+        }
+
+        if (bot.status != m_statusText) {
+            m_statusText = bot.status;
+            auto shown = m_statusText.size() > 40 ? m_statusText.substr(0, 40) : m_statusText;
+            m_status->setString(shown.c_str());
+        }
+    }
+
+    void IveyMenu::onTab(CCObject* sender) {
+        m_tab = static_cast<CCNode*>(sender)->getTag();
+        m_editClose = true;
+        m_dirty = true; // rebuilt on the next tick, never inside the tap
+    }
+
+    void IveyMenu::onRow(CCObject* sender) {
+        size_t i = static_cast<size_t>(static_cast<CCNode*>(sender)->getTag());
+        if (i >= m_rows.size()) return;
+        auto& row = m_rows[i];
+
+        if (row.get && row.set) row.set(!row.get());
+        else if (row.arrow) row.arrow();
+        else if (row.editApply) openEditor(i);
+    }
+
+    void IveyMenu::onArrow(CCObject* sender) {
+        size_t i = static_cast<size_t>(static_cast<CCNode*>(sender)->getTag());
+        if (i >= m_rows.size()) return;
+        if (m_rows[i].editApply) openEditor(i);
+        else if (m_rows[i].arrow) m_rows[i].arrow();
+    }
+
+    void IveyMenu::openEditor(size_t i) {
+        if (i >= m_rows.size() || !m_rows[i].editApply) return;
+        closeEditor();
+
+        auto& row = m_rows[i];
+        m_editIndex = static_cast<int>(i);
+
+        m_editor = CCNode::create();
+        m_root->addChild(m_editor, 5);
+
+        auto bar = CCLayerColor::create({36, 36, 36, 255}, W - 16.f, 46.f);
+        bar->setPosition({8.f, 24.f});
+        m_editor->addChild(bar);
+
+        auto title = CCLabelBMFont::create(
+            fmt::format("{}  ({:g} to {:g})", row.editTitle, row.editMin, row.editMax).c_str(),
+            fontName().c_str()
+        );
+        styleText(title, 0.38f);
+        title->setAnchorPoint({0.f, 0.5f});
+        title->setColor(accentColor());
+        title->setPosition({14.f, 62.f});
+        m_editor->addChild(title, 2);
+
+        m_input = TextInput::create(120.f, "number");
+        m_input->setFilter("0123456789.");
+        m_input->setMaxCharCount(9);
+        m_input->setScale(0.7f);
+        m_input->setPosition({56.f, 40.f});
+        m_input->setString(row.editValue ? row.editValue() : std::string());
+        m_editor->addChild(m_input, 2);
+
+        auto menu = CCMenu::create();
+        menu->setPosition({0.f, 0.f});
+        menu->setTouchPriority(-501);
+        m_editor->addChild(menu, 3);
+
+        auto makeButton = [&](char const* text, float w, float x, SEL_MenuHandler handler, ccColor3B color) {
+            auto node = CCNode::create();
+            node->setContentSize({w, 18.f});
+            node->setAnchorPoint({0.5f, 0.5f});
+            node->addChild(CCLayerColor::create({62, 62, 62, 255}, w, 18.f));
+            auto l = CCLabelBMFont::create(text, fontName().c_str());
+            styleText(l, 0.42f);
+            l->setColor(color);
+            l->setPosition({w / 2.f, 9.f});
+            node->addChild(l, 1);
+            auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, handler);
+            item->setPosition({x, 40.f});
+            menu->addChild(item);
+        };
+        makeButton("Set", 44.f, W - 62.f, menu_selector(IveyMenu::onEditSet), accentColor());
+        makeButton("x", 24.f, W - 26.f, menu_selector(IveyMenu::onEditCancel), ccColor3B{220, 220, 220});
+    }
+
+    void IveyMenu::showSearch(bool show) {
+        if (!show) {
+            if (m_searchHolder) {
+                m_searchHolder->removeFromParentAndCleanup(true);
+                m_searchHolder = nullptr;
+                m_search = nullptr;
+            }
+            return;
+        }
+        if (m_searchHolder) return;
+
+        m_searchHolder = CCNode::create();
+        m_root->addChild(m_searchHolder, 4);
+
+        float y = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f - ROW_H / 2.f;
+
+        m_search = TextInput::create(360.f, "Search macros...");
+        m_search->setMaxCharCount(30);
+        m_search->setScale(0.7f);
+        m_search->setPosition({140.f, y});
+        m_search->setString(m_query);
+        m_search->setCallback([this](std::string const& text) { m_query = text; });
+        m_searchHolder->addChild(m_search);
+
+        auto menu = CCMenu::create();
+        menu->setPosition({0.f, 0.f});
+        menu->setTouchPriority(-501);
+        m_searchHolder->addChild(menu, 2);
+
+        auto node = CCNode::create();
+        node->setContentSize({24.f, 18.f});
+        node->setAnchorPoint({0.5f, 0.5f});
+        node->addChild(CCLayerColor::create({62, 62, 62, 255}, 24.f, 18.f));
+        auto l = CCLabelBMFont::create("x", fontName().c_str());
+        styleText(l, 0.42f);
+        l->setColor({220, 220, 220});
+        l->setPosition({12.f, 9.f});
+        node->addChild(l, 1);
+        auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(IveyMenu::onClearSearch));
+        item->setPosition({W - 26.f, y});
+        menu->addChild(item);
+    }
+
+    void IveyMenu::openSearch() {
+        m_searchOpen = true;
+        m_tab = TAB_SEARCH;
+        m_dirty = true; // rebuilt on the next tick, never inside the tap
+    }
+
+    void IveyMenu::onCloseSearch(CCObject*) {
+        m_searchOpen = false;
+        m_query.clear();
+        m_tab = TAB_MACRO;
+        m_dirty = true;
+    }
+
+    void IveyMenu::onClearSearch(CCObject*) {
+        m_query.clear();
+        if (m_search) m_search->setString("");
+    }
+
+    void IveyMenu::closeEditor() {
+        if (m_editor) {
+            m_editor->removeFromParentAndCleanup(true);
+            m_editor = nullptr;
+        }
+        m_input = nullptr;
+        m_editIndex = -1;
+    }
+
+    void IveyMenu::onEditSet(CCObject*) {
+        if (!m_input || m_editIndex < 0 || m_editIndex >= static_cast<int>(m_rows.size())) return;
+        auto& row = m_rows[m_editIndex];
+
+        std::string text = m_input->getString();
+        char* end = nullptr;
+        double v = std::strtod(text.c_str(), &end);
+        if (text.empty() || end == text.c_str()) {
+            Bot::get().status = "Type a number first";
+            return;
+        }
+
+        v = std::clamp(v, row.editMin, row.editMax);
+        row.editApply(v);
+        m_editClose = true;
+    }
+
+    void IveyMenu::onEditCancel(CCObject*) {
+        m_editClose = true;
+    }
+
+    void IveyMenu::onClose(CCObject*) {
+        this->removeFromParentAndCleanup(true);
+    }
+}
