@@ -260,7 +260,7 @@ class $modify(IveyTrajectoryLayer, PlayLayer) {
         PlayLayer::postUpdate(dt);
         // While the TPS loop runs, the trajectory waits for the end of the frame
         // so its time is not taken from the physics steps.
-        if (!Trajectory::get().creating() && !Bot::get().stepping) Trajectory::get().update(this);
+        if (!Trajectory::get().creating() && !ivey::Bot::get().stepping) Trajectory::get().update(this);
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* object) {
