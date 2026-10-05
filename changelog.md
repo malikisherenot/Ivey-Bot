@@ -1,5 +1,19 @@
 # Ivey Bot Changelog
 
+## v1.9.1
+
+- Trajectory outside the step budget
+- Slow warning
+- Stepper buttons bottom left
+
+## v1.9.0
+
+- Faster menu
+- New menu look
+- Movable and resizable menu
+- Real TPS readout
+- Bigger step budget
+
 ## v1.8.3
 
 - .gdr.json playback
