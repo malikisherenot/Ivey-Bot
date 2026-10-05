@@ -27,8 +27,8 @@ namespace ivey {
         swiftSmart    = m->getSavedValue<bool>("swift-smart", false);
         corrInterval  = m->getSavedValue<int>("corr-interval", 8);
         waveInterval  = m->getSavedValue<int>("wave-interval", 1);
-        stepBudget    = m->getSavedValue<int>("step-budget", 17);
-        if (stepBudget == 12) stepBudget = 17; // the old default
+        stepBudget    = m->getSavedValue<int>("step-budget", 33);
+        if (stepBudget == 12 || stepBudget == 17) stepBudget = 33; // the old defaults
         tps           = m->getSavedValue<int>("tps", 240);
         speedhack     = m->getSavedValue<bool>("speedhack", false);
         speedAudio    = m->getSavedValue<bool>("speed-audio", true);
@@ -49,7 +49,7 @@ namespace ivey {
         if (trajectoryLength < 2 || trajectoryLength > 2000) trajectoryLength = 500;
         if (swiftClicks < 1 || swiftClicks > 100) swiftClicks = 2;
 
-        if (stepBudget < 1 || stepBudget > 100) stepBudget = 17;
+        if (stepBudget < 1 || stepBudget > 250) stepBudget = 33;
         if (speed < 0.01f || speed > 1000.f) speed = 1.f;
     }
 
@@ -314,10 +314,10 @@ namespace ivey {
         };
 
         const Preset PRESETS[] = {
-            {"Accuracy",    240, true,  2,  1, 50, true},
-            {"Balanced",    240, true,  8,  2, 17, true},
+            {"Accuracy",    240, true,  2,  1, 66, true},
+            {"Balanced",    240, true,  8,  2, 33, true},
             {"Performance", 240, true,  32, 8, 8,  true},
-            {"Wave",        480, true,  4,  1, 16, true},
+            {"Wave",        480, true,  4,  1, 33, true},
             {"Lite",        240, false, 8,  2, 8,  true},
         };
     }

@@ -27,7 +27,7 @@ namespace ivey {
         bool swiftSmart = false;
         int  corrInterval = 8;
         int  waveInterval = 1;
-        int  stepBudget = 17; // ms of stepping allowed per screen frame
+        int  stepBudget = 33; // ms of stepping allowed per screen frame
         int  tps = 240;
         bool speedhack = false;
         bool speedAudio = true;
@@ -65,6 +65,7 @@ namespace ivey {
         int stepsPending = 0;
         bool swiftBusy = false;
         float leftOver = 0.f; // time the TPS stepping has not used yet
+        bool stepping = false; // true while the TPS loop is running its steps
 
         Config cfg;
         Mode mode = Mode::Idle;

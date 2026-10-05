@@ -46,6 +46,7 @@ namespace ivey {
 
         // Physics step the real players use, read from the game.
         float delta = 0.25f;
+        bool deltaSeen = false; // true once the game has really reported a step size
 
         // Latest results (index 0 = P1, 1 = P2), free to read from other features.
         Path lastHold[2];

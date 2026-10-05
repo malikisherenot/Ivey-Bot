@@ -164,10 +164,14 @@ namespace ivey {
 
         // At high TPS the game updates several times per screen frame.
         // One simulation per screen frame is enough.
+        // It also waits longer after a slow run, so long trajectories can't eat the whole frame.
         static auto last = std::chrono::steady_clock::time_point{};
+        static double lastCostMs = 0.0;
         auto now = std::chrono::steady_clock::now();
-        if (m_node->isVisible() && now - last < std::chrono::milliseconds(12)) return;
+        double wait = std::max(12.0, lastCostMs * 3.0);
+        if (m_node->isVisible() && std::chrono::duration<double, std::milli>(now - last).count() < wait) return;
         last = now;
+        auto began = now;
 
         m_node->clear();
         m_node->setVisible(true);
@@ -216,6 +220,8 @@ namespace ivey {
             lastHold[p] = std::move(hold);
             lastRelease[p] = std::move(release);
         }
+
+        lastCostMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
     }
 }
 
@@ -252,7 +258,9 @@ class $modify(IveyTrajectoryLayer, PlayLayer) {
 
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
-        if (!Trajectory::get().creating()) Trajectory::get().update(this);
+        // While the TPS loop runs, the trajectory waits for the end of the frame
+        // so its time is not taken from the physics steps.
+        if (!Trajectory::get().creating() && !Bot::get().stepping) Trajectory::get().update(this);
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* object) {
@@ -335,7 +343,10 @@ class $modify(IveyTrajectoryBase, GJBaseGameLayer) {
 class $modify(IveyTrajectoryPlayer, PlayerObject) {
     void update(float dt) {
         PlayerObject::update(dt);
-        if (!Trajectory::get().creating()) Trajectory::get().delta = dt;
+        if (!Trajectory::get().creating()) {
+            Trajectory::get().delta = dt;
+            Trajectory::get().deltaSeen = true;
+        }
     }
 
     void playSpiderDashEffect(CCPoint from, CCPoint to) {
