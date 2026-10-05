@@ -19,6 +19,7 @@ namespace ivey {
         std::function<void()> arrow;             // optional arrow button
         std::function<std::string()> detail;     // optional text after the label
         bool box = false;                        // drawn like a button
+        bool sep = false;                        // thin line above the row
 
         // Optional: value typed with the keyboard (the arrow opens the editor).
         std::string editTitle;
@@ -26,6 +27,14 @@ namespace ivey {
         double editMin = 0.0;
         double editMax = 0.0;
         std::function<void(double)> editApply;
+    };
+
+    // What is on screen for one row, so values can change without rebuilding it.
+    struct RowView {
+        cocos2d::CCNode* mark = nullptr;          // the check mark
+        cocos2d::CCLabelBMFont* detail = nullptr; // the value on the right
+        bool on = false;
+        std::string detailText;
     };
 
     class IveyMenu : public cocos2d::CCLayer {
@@ -40,12 +49,20 @@ namespace ivey {
         bool init() override;
         void registerWithTouchDispatcher() override;
         bool ccTouchBegan(cocos2d::CCTouch* touch, cocos2d::CCEvent* event) override;
+        void ccTouchMoved(cocos2d::CCTouch* touch, cocos2d::CCEvent* event) override;
+        void ccTouchEnded(cocos2d::CCTouch* touch, cocos2d::CCEvent* event) override;
+        void ccTouchCancelled(cocos2d::CCTouch* touch, cocos2d::CCEvent* event) override;
         void keyBackClicked() override;
 
         void rebuildTabs();
         void rebuild();
         void applyTheme();
         void sync(float dt);
+        void flush(float dt);
+        void queue(bool force);
+        void refreshRows();
+        void saveWindow();
+        std::string structureKey() const;
         void openEditor(size_t row);
         void closeEditor();
         void showSearch(bool show);
@@ -68,7 +85,15 @@ namespace ivey {
         cocos2d::CCLabelBMFont* m_status = nullptr;
 
         std::vector<MenuRow> m_rows;
-        std::string m_snap;
+        std::vector<RowView> m_views;
+        std::string m_built;
+        cocos2d::CCNode* m_tabDeco = nullptr;
+        cocos2d::CCPoint m_dragFrom;
+        float m_scale = 1.f;
+        float m_scaleFrom = 1.f;
+        int m_drag = 0; // 1 = moving, 2 = resizing
+        bool m_queued = false;
+        bool m_force = false;
         std::string m_statusText;
         cocos2d::CCNode* m_editor = nullptr;
         geode::TextInput* m_input = nullptr;
@@ -80,6 +105,5 @@ namespace ivey {
         int m_tab = 0;
         int m_tabRows = 1;
         bool m_searchOpen = false;
-        bool m_dirty = true;
     };
 }

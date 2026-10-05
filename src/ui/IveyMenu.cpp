@@ -59,14 +59,17 @@ namespace ivey {
             bot.refreshFiles();
             std::string q = lower(query);
 
-            std::vector<std::filesystem::path> hits;
+            std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> found;
             for (auto const& f : bot.files) {
-                if (q.empty() || lower(f.stem().string()).find(q) != std::string::npos) hits.push_back(f);
+                if (!q.empty() && lower(f.stem().string()).find(q) == std::string::npos) continue;
+                std::error_code ec;
+                found.emplace_back(std::filesystem::last_write_time(f, ec), f);
             }
-            std::sort(hits.begin(), hits.end(), [](auto const& x, auto const& y) {
-                std::error_code e1, e2;
-                return std::filesystem::last_write_time(x, e1) > std::filesystem::last_write_time(y, e2);
-            });
+            std::sort(found.begin(), found.end(), [](auto const& x, auto const& y) { return x.first > y.first; });
+
+            std::vector<std::filesystem::path> hits;
+            hits.reserve(found.size());
+            for (auto& item : found) hits.push_back(std::move(item.second));
             return hits;
         }
 
@@ -227,7 +230,7 @@ namespace ivey {
                     action("Accuracy Steps", nullptr, tpsText);
                     editable("TPS", tpsValue, 1, 65535, setTps);
                     action("Step Budget", nullptr, [] { return fmt::format("{} ms", Bot::get().cfg.stepBudget); });
-                    editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 100,
+                    editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 250,
                              [](double v) {
                                  auto& cfg = Bot::get().cfg;
                                  cfg.stepBudget = static_cast<int>(std::lround(v));
@@ -308,6 +311,13 @@ namespace ivey {
                 }
                 default: break;
             }
+
+            // Thin lines that group related rows.
+            static char const* const GROUPS[] = {"Instant Respawn", "Swift Clicks", "Auto Safe Mode",
+                                                 "Record", "Clear Macro", "Step Budget", "Save Macro"};
+            for (size_t i = 1; i < r.size(); ++i) {
+                for (auto g : GROUPS) if (r[i].label == g) r[i].sep = true;
+            }
             return r;
         }
     }
@@ -383,13 +393,72 @@ namespace ivey {
         CCDirector::get()->getTouchDispatcher()->addTargetedDelegate(this, -500, true);
     }
 
+    namespace {
+        CCPoint clampWindow(CCPoint p, float scale) {
+            auto win = CCDirector::get()->getWinSize();
+            p.x = std::clamp(p.x, -(W * scale - 70.f), win.width - 70.f);
+            p.y = std::clamp(p.y, -(H * scale - 40.f), win.height - 40.f);
+            return p;
+        }
+    }
+
     bool IveyMenu::ccTouchBegan(CCTouch* touch, CCEvent*) {
         if (!m_root) return false;
         if (m_editor && touchInside(m_input, touch)) return false;
         if (m_searchHolder && touchInside(m_search, touch)) return false;
+
         // Only swallow touches on the window, the game stays playable around it.
         auto local = m_root->convertToNodeSpace(touch->getLocation());
-        return CCRect(0.f, 0.f, W, H).containsPoint(local);
+        if (!CCRect(0.f, 0.f, W, H).containsPoint(local)) return false;
+
+        m_drag = 0;
+        if (local.y > H - TITLE_H && local.x < W - 30.f) {
+            m_drag = 1; // title bar moves the window
+        }
+        else if (local.x > W - 24.f && local.y < 24.f) {
+            m_drag = 2; // corner resizes it
+            m_dragFrom = touch->getLocation();
+            m_scaleFrom = m_scale;
+        }
+        return true;
+    }
+
+    void IveyMenu::ccTouchMoved(CCTouch* touch, CCEvent*) {
+        if (!m_root) return;
+
+        if (m_drag == 1) {
+            auto delta = ccpSub(touch->getLocation(), touch->getPreviousLocation());
+            m_root->setPosition(clampWindow(ccpAdd(m_root->getPosition(), delta), m_scale));
+        }
+        else if (m_drag == 2) {
+            auto now = touch->getLocation();
+            float grow = ((now.x - m_dragFrom.x) - (now.y - m_dragFrom.y)) / 400.f;
+            float next = std::clamp(m_scaleFrom + grow, 0.6f, 1.4f);
+
+            // keep the top left corner where it is
+            float top = m_root->getPositionY() + H * m_scale;
+            m_scale = next;
+            m_root->setScale(next);
+            m_root->setPositionY(top - H * next);
+        }
+    }
+
+    void IveyMenu::ccTouchEnded(CCTouch*, CCEvent*) {
+        if (m_drag != 0) saveWindow();
+        m_drag = 0;
+    }
+
+    void IveyMenu::ccTouchCancelled(CCTouch*, CCEvent*) {
+        if (m_drag != 0) saveWindow();
+        m_drag = 0;
+    }
+
+    void IveyMenu::saveWindow() {
+        if (!m_root) return;
+        auto mod = Mod::get();
+        mod->setSavedValue("menu-x", m_root->getPositionX());
+        mod->setSavedValue("menu-y", m_root->getPositionY());
+        mod->setSavedValue("menu-scale", m_scale);
     }
 
     void IveyMenu::keyBackClicked() {
@@ -404,26 +473,62 @@ namespace ivey {
         this->setKeypadEnabled(true);
 
         auto win = CCDirector::get()->getWinSize();
+        auto mod = Mod::get();
+
+        m_scale = std::clamp(mod->getSavedValue<float>("menu-scale", 1.f), 0.6f, 1.4f);
 
         m_root = CCNode::create();
-        m_root->setPosition({24.f, win.height - 24.f - H});
+        m_root->setScale(m_scale);
+        m_root->setPosition(clampWindow({
+            mod->getSavedValue<float>("menu-x", 24.f),
+            mod->getSavedValue<float>("menu-y", win.height - 24.f - H * m_scale)
+        }, m_scale));
         this->addChild(m_root);
+
+        // soft shadow, thin border, then the window itself
+        auto shadow = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
+        shadow->setAnchorPoint({0.f, 0.f});
+        shadow->setContentSize({W + 8.f, H + 8.f});
+        shadow->setPosition({-4.f, -6.f});
+        shadow->setColor({0, 0, 0});
+        shadow->setOpacity(90);
+        m_root->addChild(shadow);
+
+        auto border = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
+        border->setAnchorPoint({0.f, 0.f});
+        border->setContentSize({W + 2.f, H + 2.f});
+        border->setPosition({-1.f, -1.f});
+        border->setColor({84, 84, 84});
+        border->setOpacity(255);
+        m_root->addChild(border);
 
         m_bg = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
         m_bg->setAnchorPoint({0.f, 0.f});
         m_bg->setContentSize({W, H});
-        m_bg->setColor({22, 22, 22});
+        m_bg->setColor({20, 20, 20});
         m_root->addChild(m_bg);
 
-        auto titleBar = CCLayerColor::create({40, 40, 40, 255}, W - 8.f, TITLE_H - 4.f);
+        auto titleBar = CCLayerColor::create({38, 38, 38, 255}, W - 8.f, TITLE_H - 4.f);
         titleBar->setPosition({4.f, H - TITLE_H});
         m_root->addChild(titleBar);
+        auto titleLine = CCLayerColor::create({64, 64, 64, 255}, W - 8.f, 1.f);
+        titleLine->setPosition({4.f, H - TITLE_H - 1.f});
+        m_root->addChild(titleLine);
 
         auto title = CCLabelBMFont::create("Ivey Bot", fontName().c_str());
         styleText(title, 0.45f);
-        title->setColor({230, 230, 230});
+        title->setColor({235, 235, 235});
         title->setPosition({W / 2.f, H - TITLE_H / 2.f - 2.f});
         m_root->addChild(title, 2);
+
+        // resize grip in the corner
+        auto grip = CCDrawNode::create();
+        CCPoint tri[3] = {{W - 5.f, 5.f}, {W - 5.f, 15.f}, {W - 15.f, 5.f}};
+        grip->drawPolygon(tri, 3, ccc4f(0.45f, 0.45f, 0.45f, 1.f), 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
+        m_root->addChild(grip, 2);
+
+        m_tabDeco = CCNode::create();
+        m_root->addChild(m_tabDeco, 2);
 
         m_tabMenu = CCMenu::create();
         m_tabMenu->setPosition({0.f, 0.f});
@@ -435,6 +540,10 @@ namespace ivey {
         m_content->setTouchPriority(-501);
         m_root->addChild(m_content, 3);
 
+        auto statusLine = CCLayerColor::create({50, 50, 50, 255}, W - 40.f, 1.f);
+        statusLine->setPosition({10.f, 22.f});
+        m_root->addChild(statusLine, 2);
+
         m_status = CCLabelBMFont::create("", fontName().c_str());
         styleText(m_status, 0.38f);
         m_status->setAnchorPoint({0.f, 0.5f});
@@ -442,8 +551,16 @@ namespace ivey {
         m_status->setPosition({10.f, 12.f});
         m_root->addChild(m_status, 2);
 
+        // Built right away, nothing waits for a timer.
         applyTheme();
-        this->schedule(schedule_selector(IveyMenu::sync), 0.1f);
+        rebuildTabs();
+        rebuild();
+        refreshRows();
+
+        m_statusText = Bot::get().status;
+        m_status->setString(m_statusText.substr(0, 48).c_str());
+
+        this->schedule(schedule_selector(IveyMenu::sync), 0.2f);
         return true;
     }
 
@@ -451,8 +568,64 @@ namespace ivey {
         m_bg->setOpacity(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]);
     }
 
+    std::string IveyMenu::structureKey() const {
+        auto& bot = Bot::get();
+        return fmt::format("{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity, m_searchOpen);
+    }
+
+    // Rebuilds happen on the next frame, never inside the tap that asked for them.
+    void IveyMenu::queue(bool force) {
+        m_force = m_force || force;
+        if (m_queued) return;
+        m_queued = true;
+        this->scheduleOnce(schedule_selector(IveyMenu::flush), 0.f);
+    }
+
+    void IveyMenu::flush(float) {
+        m_queued = false;
+        bool force = m_force;
+        m_force = false;
+
+        if (m_editClose) {
+            m_editClose = false;
+            closeEditor();
+        }
+        if (force || structureKey() != m_built) {
+            applyTheme();
+            rebuildTabs();
+            rebuild();
+        }
+        refreshRows();
+    }
+
+    // Updates check marks and values in place. Nothing is created or removed.
+    void IveyMenu::refreshRows() {
+        for (size_t i = 0; i < m_rows.size() && i < m_views.size(); ++i) {
+            auto& row = m_rows[i];
+            auto& view = m_views[i];
+
+            if (row.get && view.mark) {
+                bool on = row.get();
+                if (on != view.on) {
+                    view.on = on;
+                    view.mark->setVisible(on);
+                }
+            }
+            if (row.detail && view.detail) {
+                std::string text = row.detail();
+                if (text != view.detailText) {
+                    view.detailText = text;
+                    view.detail->setString(text.c_str());
+                    bool lit = text == "active" || text == "loaded";
+                    view.detail->setColor(lit ? accentColor() : ccColor3B{150, 150, 150});
+                }
+            }
+        }
+    }
+
     void IveyMenu::rebuildTabs() {
         m_tabMenu->removeAllChildrenWithCleanup(true);
+        m_tabDeco->removeAllChildrenWithCleanup(true);
 
         float x = 8.f;
         int row = 0;
@@ -472,7 +645,7 @@ namespace ivey {
         for (int id : tabOrder(m_searchOpen)) {
             auto lbl = CCLabelBMFont::create(TAB_NAMES[id], fontName().c_str());
             styleText(lbl, 0.42f);
-            float w = lbl->getContentSize().width * T() * fontWidth() + 8.f;
+            float w = lbl->getContentSize().width * T() * fontWidth() + 10.f;
             float closeW = id == TAB_SEARCH ? 14.f : 0.f;
 
             float start = reserve(w + (closeW > 0.f ? closeW + 1.f : 0.f));
@@ -483,15 +656,16 @@ namespace ivey {
             node->setAnchorPoint({0.5f, 0.5f});
 
             if (id == m_tab) {
-                auto hl = CCLayerColor::create({62, 62, 62, 255}, w, 16.f);
-                node->addChild(hl);
-                lbl->setColor(accentColor());
+                node->addChild(CCLayerColor::create({60, 60, 60, 255}, w, 16.f));
+                auto line = CCLayerColor::create({accentColor().r, accentColor().g, accentColor().b, 255}, w, 2.f);
+                node->addChild(line, 1);
+                lbl->setColor({245, 245, 245});
             }
             else {
-                lbl->setColor({200, 200, 200});
+                lbl->setColor({170, 170, 170});
             }
             lbl->setPosition({w / 2.f, 8.f});
-            node->addChild(lbl, 1);
+            node->addChild(lbl, 2);
 
             auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(IveyMenu::onTab));
             item->m_scaleMultiplier = 1.f;
@@ -504,7 +678,7 @@ namespace ivey {
                 auto xNode = CCNode::create();
                 xNode->setContentSize({closeW, 16.f});
                 xNode->setAnchorPoint({0.5f, 0.5f});
-                xNode->addChild(CCLayerColor::create({62, 62, 62, 255}, closeW, 16.f));
+                xNode->addChild(CCLayerColor::create({60, 60, 60, 255}, closeW, 16.f));
                 auto xl = CCLabelBMFont::create("x", fontName().c_str());
                 styleText(xl, 0.42f);
                 xl->setColor({255, 140, 140});
@@ -519,13 +693,19 @@ namespace ivey {
         }
         m_tabRows = row + 1;
 
+        // thin line under the tabs
+        float lineY = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 3.f;
+        auto line = CCLayerColor::create({58, 58, 58, 255}, W - 16.f, 1.f);
+        line->setPosition({8.f, lineY});
+        m_tabDeco->addChild(line);
+
         // close button
         auto closeNode = CCNode::create();
         closeNode->setContentSize({18.f, 18.f});
         closeNode->setAnchorPoint({0.5f, 0.5f});
         auto x1 = CCLabelBMFont::create("x", fontName().c_str());
         styleText(x1, 0.55f);
-        x1->setColor({220, 220, 220});
+        x1->setColor({225, 225, 225});
         x1->setPosition({9.f, 9.f});
         closeNode->addChild(x1);
         auto closeItem = CCMenuItemSpriteExtra::create(closeNode, nullptr, this, menu_selector(IveyMenu::onClose));
@@ -535,48 +715,80 @@ namespace ivey {
 
     void IveyMenu::rebuild() {
         m_content->removeAllChildrenWithCleanup(true);
+        m_views.clear();
         showSearch(m_tab == TAB_SEARCH);
         m_rows = rowsFor(m_tab, m_query);
+        m_built = structureKey();
+
+        auto accent = accentColor();
+        ccColor4F accentF = ccc4f(accent.r / 255.f, accent.g / 255.f, accent.b / 255.f, 1.f);
 
         float rowW = W - 44.f;
+        float rowH = ROW_H - 2.f;
         float y = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f - ROW_H / 2.f;
         if (m_tab == TAB_SEARCH) y -= 24.f; // room for the search box
 
         for (size_t i = 0; i < m_rows.size(); ++i) {
             auto& row = m_rows[i];
             bool hasCheck = static_cast<bool>(row.get);
+            RowView view;
 
             auto holder = CCNode::create();
-            holder->setContentSize({rowW, ROW_H - 2.f});
+            holder->setContentSize({rowW, rowH});
             holder->setAnchorPoint({0.5f, 0.5f});
 
+            if (row.sep) {
+                auto line = CCLayerColor::create({52, 52, 52, 255}, rowW, 1.f);
+                line->setPosition({0.f, rowH + 0.5f});
+                holder->addChild(line);
+            }
+
             if (row.box) {
-                holder->addChild(CCLayerColor::create({40, 40, 40, 255}, rowW, ROW_H - 2.f));
+                holder->addChild(CCLayerColor::create({84, 84, 84, 255}, rowW, rowH));
+                auto inner = CCLayerColor::create({34, 34, 34, 255}, rowW - 2.f, rowH - 2.f);
+                inner->setPosition({1.f, 1.f});
+                holder->addChild(inner);
             }
 
             if (hasCheck) {
                 auto box = CCNode::create();
                 box->setContentSize({14.f, 14.f});
-                auto bg = CCLayerColor::create({48, 48, 48, 255}, 14.f, 14.f);
-                box->addChild(bg);
-                if (row.get()) {
-                    auto fill = CCLayerColor::create({accentColor().r, accentColor().g, accentColor().b, 255}, 8.f, 8.f);
-                    fill->setPosition({3.f, 3.f});
-                    box->addChild(fill);
-                }
-                box->setPosition({4.f, (ROW_H - 2.f) / 2.f - 7.f});
+                box->addChild(CCLayerColor::create({92, 92, 92, 255}, 14.f, 14.f));
+                auto inner = CCLayerColor::create({30, 30, 30, 255}, 12.f, 12.f);
+                inner->setPosition({1.f, 1.f});
+                box->addChild(inner);
+
+                auto mark = CCDrawNode::create();
+                mark->drawSegment({3.5f, 7.5f}, {6.f, 4.5f}, 0.9f, accentF);
+                mark->drawSegment({6.f, 4.5f}, {10.5f, 10.f}, 0.9f, accentF);
+                box->addChild(mark, 2);
+
+                box->setPosition({4.f, rowH / 2.f - 7.f});
                 holder->addChild(box);
+
+                view.on = row.get();
+                mark->setVisible(view.on);
+                view.mark = mark;
             }
 
-            std::string text = row.label;
-            if (row.detail) text += "  " + row.detail();
-
-            auto lbl = CCLabelBMFont::create(text.c_str(), fontName().c_str());
+            auto lbl = CCLabelBMFont::create(row.label.c_str(), fontName().c_str());
             styleText(lbl, 0.42f);
             lbl->setAnchorPoint({0.f, 0.5f});
-            lbl->setColor({225, 225, 225});
-            lbl->setPosition({hasCheck ? 24.f : (row.box ? 10.f : 4.f), (ROW_H - 2.f) / 2.f});
-            holder->addChild(lbl);
+            lbl->setColor({228, 228, 228});
+            lbl->setPosition({hasCheck ? 26.f : (row.box ? 10.f : 4.f), rowH / 2.f});
+            holder->addChild(lbl, 1);
+
+            if (row.detail) {
+                view.detailText = row.detail();
+                auto det = CCLabelBMFont::create(view.detailText.c_str(), fontName().c_str());
+                styleText(det, 0.40f);
+                det->setAnchorPoint({1.f, 0.5f});
+                bool lit = view.detailText == "active" || view.detailText == "loaded";
+                det->setColor(lit ? accent : ccColor3B{150, 150, 150});
+                det->setPosition({rowW - 6.f, rowH / 2.f});
+                holder->addChild(det, 1);
+                view.detail = det;
+            }
 
             auto item = CCMenuItemSpriteExtra::create(holder, nullptr, this, menu_selector(IveyMenu::onRow));
             item->m_scaleMultiplier = 1.f;
@@ -585,21 +797,28 @@ namespace ivey {
             m_content->addChild(item);
 
             if (row.arrow || row.editApply) {
+                // a small square with a triangle, like the original window
                 auto arrowNode = CCNode::create();
                 arrowNode->setContentSize({18.f, 18.f});
                 arrowNode->setAnchorPoint({0.5f, 0.5f});
-                auto a = CCLabelBMFont::create(">", fontName().c_str());
-                styleText(a, 0.6f);
-                a->setColor(accentColor());
-                a->setPosition({9.f, 9.f});
-                arrowNode->addChild(a);
+                arrowNode->addChild(CCLayerColor::create({92, 92, 92, 255}, 18.f, 18.f));
+                auto inner = CCLayerColor::create({42, 42, 42, 255}, 16.f, 16.f);
+                inner->setPosition({1.f, 1.f});
+                arrowNode->addChild(inner);
+
+                auto tri = CCDrawNode::create();
+                CCPoint v[3] = {{6.5f, 5.f}, {6.5f, 13.f}, {12.5f, 9.f}};
+                tri->drawPolygon(v, 3, ccc4f(0.88f, 0.88f, 0.88f, 1.f), 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
+                arrowNode->addChild(tri, 2);
 
                 auto arrowItem = CCMenuItemSpriteExtra::create(arrowNode, nullptr, this, menu_selector(IveyMenu::onArrow));
+                arrowItem->m_scaleMultiplier = 1.f;
                 arrowItem->setTag(static_cast<int>(i));
                 arrowItem->setPosition({W - 18.f, y});
                 m_content->addChild(arrowItem);
             }
 
+            m_views.push_back(view);
             y -= ROW_H;
         }
     }
@@ -612,38 +831,12 @@ namespace ivey {
             closeEditor();
         }
 
-        std::string snap;
-        for (auto& r : m_rows) {
-            snap += r.get ? (r.get() ? '1' : '0') : '-';
-            if (r.detail) snap += r.detail();
-            snap += '|';
-        }
-        snap += std::to_string(bot.cfg.accent) + "," + std::to_string(bot.cfg.opacity);
-        snap += "?" + m_query + "|" + bot.loadedName;
-
-        if (m_dirty || snap != m_snap) {
-            bool first = m_dirty;
-            m_dirty = false;
-            applyTheme();
-            rebuildTabs();
-            rebuild();
-
-            // snapshot of the rebuilt rows
-            std::string s2;
-            for (auto& r : m_rows) {
-                s2 += r.get ? (r.get() ? '1' : '0') : '-';
-                if (r.detail) s2 += r.detail();
-                s2 += '|';
-            }
-            s2 += std::to_string(bot.cfg.accent) + "," + std::to_string(bot.cfg.opacity);
-            s2 += "?" + m_query + "|" + bot.loadedName;
-            m_snap = s2;
-            (void)first;
-        }
+        if (structureKey() != m_built) queue(false);
+        else refreshRows();
 
         if (bot.status != m_statusText) {
             m_statusText = bot.status;
-            auto shown = m_statusText.size() > 40 ? m_statusText.substr(0, 40) : m_statusText;
+            auto shown = m_statusText.size() > 48 ? m_statusText.substr(0, 48) : m_statusText;
             m_status->setString(shown.c_str());
         }
     }
@@ -651,7 +844,7 @@ namespace ivey {
     void IveyMenu::onTab(CCObject* sender) {
         m_tab = static_cast<CCNode*>(sender)->getTag();
         m_editClose = true;
-        m_dirty = true; // rebuilt on the next tick, never inside the tap
+        queue(true);
     }
 
     void IveyMenu::onRow(CCObject* sender) {
@@ -662,6 +855,9 @@ namespace ivey {
         if (row.get && row.set) row.set(!row.get());
         else if (row.arrow) row.arrow();
         else if (row.editApply) openEditor(i);
+
+        refreshRows(); // shows the change right now
+        if (structureKey() != m_built) queue(false);
     }
 
     void IveyMenu::onArrow(CCObject* sender) {
@@ -669,6 +865,9 @@ namespace ivey {
         if (i >= m_rows.size()) return;
         if (m_rows[i].editApply) openEditor(i);
         else if (m_rows[i].arrow) m_rows[i].arrow();
+
+        refreshRows();
+        if (structureKey() != m_built) queue(false);
     }
 
     void IveyMenu::openEditor(size_t i) {
@@ -772,14 +971,14 @@ namespace ivey {
     void IveyMenu::openSearch() {
         m_searchOpen = true;
         m_tab = TAB_SEARCH;
-        m_dirty = true; // rebuilt on the next tick, never inside the tap
+        queue(true);
     }
 
     void IveyMenu::onCloseSearch(CCObject*) {
         m_searchOpen = false;
         m_query.clear();
         m_tab = TAB_MACRO;
-        m_dirty = true;
+        queue(true);
     }
 
     void IveyMenu::onClearSearch(CCObject*) {
@@ -811,10 +1010,13 @@ namespace ivey {
         v = std::clamp(v, row.editMin, row.editMax);
         row.editApply(v);
         m_editClose = true;
+        refreshRows();
+        queue(false);
     }
 
     void IveyMenu::onEditCancel(CCObject*) {
         m_editClose = true;
+        queue(false);
     }
 
     void IveyMenu::onClose(CCObject*) {
