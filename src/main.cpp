@@ -292,6 +292,9 @@ namespace {
     class Overlay : public CCNode {
         CCLabelBMFont* m_label = nullptr;
         CCMenu* m_steps = nullptr;
+        int m_lastProgress = 0;
+        std::chrono::steady_clock::time_point m_lastTime = std::chrono::steady_clock::now();
+        float m_running = 0.f;
 
     public:
         static Overlay* create() {
@@ -334,9 +337,9 @@ namespace {
                 item->setPosition({x, 30.f});
                 m_steps->addChild(item);
             };
-            addButton("+1", win.width / 2.f - 56.f, 1);
-            addButton("+10", win.width / 2.f, 10);
-            addButton("Play", win.width / 2.f + 56.f, 0);
+            addButton("+1", 34.f, 1);
+            addButton("+10", 90.f, 10);
+            addButton("Play", 146.f, 0);
             m_steps->setVisible(false);
 
             this->scheduleUpdate();
@@ -360,6 +363,18 @@ namespace {
             auto& bot = Bot::get();
             auto& cfg = bot.cfg;
             auto pl = PlayLayer::get();
+
+            // How many physics steps really happen per second (not just the setting).
+            if (pl) {
+                auto now = std::chrono::steady_clock::now();
+                double secs = std::chrono::duration<double>(now - m_lastTime).count();
+                if (secs >= 0.5) {
+                    int progress = pl->m_gameState.m_currentProgress;
+                    m_running = progress >= m_lastProgress ? static_cast<float>((progress - m_lastProgress) / secs) : 0.f;
+                    m_lastProgress = progress;
+                    m_lastTime = now;
+                }
+            }
             m_steps->setVisible(pl && cfg.stepper);
             if (!pl || !cfg.showOverlay) {
                 m_label->setString("");
@@ -374,9 +389,12 @@ namespace {
             }
             if (cfg.lblMacro) s += fmt::format("Macro: {} inputs\n", bot.macro.entries.size());
             if (cfg.lblAccuracy) {
-                // "Game" is what the physics really runs at (the player step is 60 / TPS).
-                float step = ivey::Trajectory::get().delta;
-                s += fmt::format("Accuracy: {} TPS  Game: {:.0f}", cfg.frameAccurate ? cfg.tps : 0, step > 0.f ? 60.f / step : 0.f);
+                // Step = the size of each physics step, Running = steps that really happen per second.
+                // Running below the TPS means the device can't keep up (see Step Budget).
+                auto& traj = ivey::Trajectory::get();
+                std::string stepText = traj.deltaSeen && traj.delta > 0.f ? fmt::format("{:.0f}", 60.f / traj.delta) : std::string("?");
+                s += fmt::format("Accuracy: {} TPS  Step: {}  Running: {:.0f}", cfg.frameAccurate ? cfg.tps : 0, stepText, m_running);
+                if (cfg.frameAccurate && !cfg.stepper && m_running > 1.f && m_running < cfg.tps * 0.9f) s += "  (slow)";
                 if (bot.mode == Mode::Replay && cfg.correction) s += fmt::format("  Fixes: {}", bot.fixes);
                 s += "\n";
             }
@@ -473,6 +491,9 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
         float newDt = 1.f / tps;
 
+        // Until the game reports its own step size, use the one that is being fed to it.
+        if (!ivey::Trajectory::get().deltaSeen) ivey::Trajectory::get().delta = 60.f * newDt;
+
         float realDt = dt + bot.leftOver;
         if (realDt > dt && newDt < dt) realDt = dt;
 
@@ -480,6 +501,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         std::chrono::duration<double, std::milli> budget(static_cast<double>(bot.cfg.stepBudget));
         int mult = static_cast<int>(realDt / newDt);
 
+        bot.stepping = true;
         for (int i = 0; i < mult; ++i) {
             GJBaseGameLayer::update(newDt);
             if (std::chrono::high_resolution_clock::now() - startTime > budget) {
@@ -487,8 +509,14 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 break;
             }
         }
+        bot.stepping = false;
 
         bot.leftOver += (dt - newDt * mult);
+
+        // The trajectory runs once per screen frame, outside the step budget.
+        if (auto pl = PlayLayer::get()) {
+            if (!ivey::Trajectory::get().creating()) ivey::Trajectory::get().update(pl);
+        }
     }
 
     // Also from xdBot's TPS bypass: the step size follows the chosen TPS.
