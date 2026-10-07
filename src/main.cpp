@@ -179,8 +179,14 @@ using ivey::Mode;
 
 namespace {
     float activeTps() {
-        auto& cfg = Bot::get().cfg;
-        return cfg.frameAccurate ? static_cast<float>(cfg.tps) : 240.f;
+        auto& bot = Bot::get();
+        if (!bot.cfg.frameAccurate) return 240.f;
+
+        // A loaded macro brings its TPS, but it only applies once the bot is really
+        // recording or replaying. Until then the game runs normally.
+        if (bot.backup.active && bot.mode == Mode::Idle) return 240.f;
+
+        return static_cast<float>(bot.cfg.tps);
     }
 
     // Frame = time in the level * TPS. The game's own step counter stays at
@@ -247,7 +253,7 @@ namespace {
     }
 
     // Size of the menu button in points. Change this to resize it.
-    constexpr float BUTTON_SIZE = 56.f;
+    constexpr float BUTTON_SIZE = 46.f;
 
     CCTexture2D* embeddedTexture() {
         auto cache = CCTextureCache::get();
@@ -394,7 +400,9 @@ namespace {
                 auto& traj = ivey::Trajectory::get();
                 std::string stepText = traj.deltaSeen && traj.delta > 0.f ? fmt::format("{:.0f}", 60.f / traj.delta) : std::string("?");
                 s += fmt::format("Accuracy: {} TPS  Step: {}  Running: {:.0f}", cfg.frameAccurate ? cfg.tps : 0, stepText, m_running);
-                if (cfg.frameAccurate && !cfg.stepper && m_running > 1.f && m_running < cfg.tps * 0.9f) s += "  (slow)";
+                float tpsNow = activeTps();
+                if (tpsNow != 240.f && !bot.tpsHonored) s += "  (game ignores TPS)";
+                else if (tpsNow != 240.f && !cfg.stepper && m_running > 1.f && m_running < tpsNow * 0.9f) s += "  (slow)";
                 if (bot.mode == Mode::Replay && cfg.correction) s += fmt::format("  Fixes: {}", bot.fixes);
                 s += "\n";
             }
@@ -499,19 +507,34 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
         auto startTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> budget(static_cast<double>(bot.cfg.stepBudget));
-        int mult = static_cast<int>(realDt / newDt);
+
+        // How much level time one call really advances. It should be 1 / TPS.
+        // If the game ignores the step size it is given, counting what really
+        // happened keeps the game at normal speed instead of running fast.
+        double unit = bot.stepAdvance > 0.0 ? bot.stepAdvance : static_cast<double>(newDt);
+        double simulated = 0.0;
 
         bot.stepping = true;
-        for (int i = 0; i < mult; ++i) {
+        for (int i = 0; i < 20000 && simulated + unit * 0.999 <= static_cast<double>(realDt); ++i) {
+            double before = m_gameState.m_levelTime;
             GJBaseGameLayer::update(newDt);
-            if (std::chrono::high_resolution_clock::now() - startTime > budget) {
-                mult = i + 1;
-                break;
+            double advance = m_gameState.m_levelTime - before;
+
+            if (advance > 1e-9) {
+                simulated += advance;
+                bot.stepAdvance = bot.stepAdvance > 0.0 ? bot.stepAdvance * 0.8 + advance * 0.2 : advance;
+                unit = bot.stepAdvance;
             }
+            else {
+                simulated += unit; // nothing moved (paused, dead, finished), this still ends the loop
+            }
+
+            if (std::chrono::high_resolution_clock::now() - startTime > budget) break;
         }
         bot.stepping = false;
 
-        bot.leftOver += (dt - newDt * mult);
+        bot.tpsHonored = bot.stepAdvance <= 0.0 || std::abs(bot.stepAdvance - static_cast<double>(newDt)) < static_cast<double>(newDt) * 0.25;
+        bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) - simulated, -0.05, 1.0));
 
         // The trajectory runs once per screen frame, outside the step budget.
         if (auto pl = PlayLayer::get()) {
@@ -576,6 +599,11 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 return;
             }
             bot.feed(this, frame);
+
+            // Continue: the macro has reached its end, recording takes over from here.
+            if (bot.continueFrame >= 0 && frame >= static_cast<uint32_t>(bot.continueFrame)) {
+                bot.finishContinue(this);
+            }
         }
         else if (bot.mode == Mode::Record) {
             uint32_t every = static_cast<uint32_t>(waveActive(this) ? bot.cfg.waveInterval : bot.cfg.corrInterval);
@@ -637,13 +665,18 @@ class $modify(IveyLevel, GJGameLevel) {
 // Speedhack, with optional matching audio pitch.
 class $modify(IveySpeed, CCScheduler) {
     void update(float dt) {
-        auto& cfg = Bot::get().cfg;
+        auto& bot = Bot::get();
+        auto& cfg = bot.cfg;
+
+        // Continue fast-forwards the macro to its end.
+        bool fast = bot.continuing;
         bool on = cfg.speedhack;
-        CCScheduler::update(on ? dt * cfg.speed : dt);
-        if (on && cfg.speed != 1.f && PlayLayer::get()) Bot::get().safeMode = true;
+        float speed = fast ? 5.f : (on ? cfg.speed : 1.f);
+        CCScheduler::update(dt * speed);
+        if (on && cfg.speed != 1.f && PlayLayer::get()) bot.safeMode = true;
 
         static float lastPitch = 1.f;
-        float pitch = (on && cfg.speedAudio) ? std::clamp(cfg.speed, 0.1f, 4.f) : 1.f;
+        float pitch = (!fast && on && cfg.speedAudio) ? std::clamp(cfg.speed, 0.1f, 4.f) : 1.f;
         if (pitch != lastPitch) {
             lastPitch = pitch;
             if (auto engine = FMODAudioEngine::sharedEngine()) {
