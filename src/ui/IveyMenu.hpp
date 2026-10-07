@@ -20,6 +20,7 @@ namespace ivey {
         std::function<std::string()> detail;     // optional text after the label
         bool box = false;                        // drawn like a button
         bool sep = false;                        // thin line above the row
+        bool arrowIcon = false;                  // small arrow button, only for rows that change a value or setting
 
         // Optional: value typed with the keyboard (the arrow opens the editor).
         std::string editTitle;
@@ -27,6 +28,10 @@ namespace ivey {
         double editMin = 0.0;
         double editMax = 0.0;
         std::function<void(double)> editApply;
+
+        // Optional: text typed with the keyboard (for example a macro name).
+        std::function<std::string()> textValue;
+        std::function<void(std::string const&)> textApply;
     };
 
     // What is on screen for one row, so values can change without rebuilding it.
@@ -42,6 +47,7 @@ namespace ivey {
         static void toggle();
         static IveyMenu* get();
         void openSearch(); // adds the Search tab next to Macro and switches to it
+        void closeSoon() { m_closeAfter = true; } // closes the menu once the current tap is done
 
         ~IveyMenu() override;
 
@@ -71,6 +77,7 @@ namespace ivey {
         void onRow(cocos2d::CCObject* sender);
         void onArrow(cocos2d::CCObject* sender);
         void onClose(cocos2d::CCObject* sender);
+        void onResize(cocos2d::CCObject* sender);
         void onEditSet(cocos2d::CCObject* sender);
         void onEditCancel(cocos2d::CCObject* sender);
         void onClearSearch(cocos2d::CCObject* sender);
@@ -93,6 +100,7 @@ namespace ivey {
         float m_scaleFrom = 1.f;
         int m_drag = 0; // 1 = moving, 2 = resizing
         bool m_queued = false;
+        bool m_closeAfter = false;
         bool m_force = false;
         std::string m_statusText;
         cocos2d::CCNode* m_editor = nullptr;

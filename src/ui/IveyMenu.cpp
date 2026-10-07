@@ -77,7 +77,12 @@ namespace ivey {
             std::string file = path.filename().string();
             std::string name = path.extension() == ".ivey" ? path.stem().string() : file;
             r.push_back(MenuRow{
-                name, nullptr, nullptr, [file] { Bot::get().loadByName(file); },
+                name, nullptr, nullptr,
+                [file] {
+                    auto& bot = Bot::get();
+                    if (bot.mergePending) bot.mergeByName(file);
+                    else bot.loadByName(file);
+                },
                 [file] { return Bot::get().loadedName == file ? std::string("loaded") : std::string(); }
             });
         }
@@ -117,7 +122,7 @@ namespace ivey {
                 auto& cfg = Bot::get().cfg;
                 cfg.tps = static_cast<int>(std::lround(v));
                 cfg.save();
-                Bot::get().leftOver = 0.f;
+                Bot::get().resetStepping();
                 Bot::get().status = fmt::format("TPS set to {}", cfg.tps);
             };
             auto editable = [&r](std::string title, std::function<std::string()> cur, double lo, double hi,
@@ -174,7 +179,7 @@ namespace ivey {
                             }
                             bot.cfg.frameAccurate = v;
                             bot.cfg.save();
-                            bot.leftOver = 0.f;
+                            bot.resetStepping();
                         },
                         nullptr, tpsText
                     });
@@ -190,8 +195,30 @@ namespace ivey {
                              });
                     r.push_back(MenuRow{
                         "Record",
-                        [] { return Bot::get().mode == Mode::Record; },
-                        [](bool v) { Bot::get().setMode(v ? Mode::Record : Mode::Idle); },
+                        [] { return Bot::get().mode == Mode::Record && Bot::get().onlyPlayer < 0; },
+                        [](bool v) {
+                            Bot::get().onlyPlayer = -1;
+                            Bot::get().setMode(v ? Mode::Record : Mode::Idle);
+                        },
+                        nullptr, nullptr
+                    });
+                    // Only the chosen player's inputs are caught. These macros save as name_id_p1 / name_id_p2.
+                    r.push_back(MenuRow{
+                        "Bot P1 Only",
+                        [] { return Bot::get().mode == Mode::Record && Bot::get().onlyPlayer == 0; },
+                        [](bool v) {
+                            Bot::get().onlyPlayer = 0;
+                            Bot::get().setMode(v ? Mode::Record : Mode::Idle);
+                        },
+                        nullptr, nullptr
+                    });
+                    r.push_back(MenuRow{
+                        "Bot 2P Only",
+                        [] { return Bot::get().mode == Mode::Record && Bot::get().onlyPlayer == 1; },
+                        [](bool v) {
+                            Bot::get().onlyPlayer = 1;
+                            Bot::get().setMode(v ? Mode::Record : Mode::Idle);
+                        },
                         nullptr, nullptr
                     });
                     r.push_back(MenuRow{
@@ -211,9 +238,44 @@ namespace ivey {
                     action("Search macros...", [] { if (auto m = IveyMenu::get()) m->openSearch(); });
                     r.back().box = true;
 
+                    action("Merge With...", [] {
+                        if (Bot::get().beginMerge()) {
+                            if (auto m = IveyMenu::get()) m->openSearch();
+                        }
+                    });
+
+                    if (!b.macro.entries.empty()) {
+                        action("Continue Macro", [] {
+                            if (Bot::get().startContinue()) {
+                                if (auto m = IveyMenu::get()) m->closeSoon();
+                            }
+                        }, [] { return fmt::format("from frame {}", Bot::get().lastInputFrame()); });
+                    }
+
+                    r.push_back(MenuRow{"Macro Name", nullptr, nullptr, nullptr, [] {
+                        auto const& n = Bot::get().customName;
+                        if (n.empty()) return std::string("(level name)");
+                        return n.size() > 18 ? n.substr(0, 18) : n;
+                    }});
+                    r.back().editTitle = "Name for the next save";
+                    r.back().textValue = [] { return Bot::get().customName; };
+                    r.back().textApply = [](std::string const& text) {
+                        Bot::get().customName = text;
+                        Bot::get().status = text.empty() ? "Using the level name" : "Name set: " + text;
+                    };
+
                     action("Save Macro", [] { Bot::get().save(); });
                     action("Delete Loaded", [] { Bot::get().deleteSelected(); });
-                    action("Open Folder", [] { geode::utils::file::openFolder(Bot::get().dir()); });
+                    action("Open Folder", [] {
+#if defined(GEODE_IS_MOBILE)
+                        // Opening a folder crashes on phones, so the path is shown instead.
+                        auto path = Bot::get().dir().string();
+                        Notification::create("Macros: " + path, NotificationIcon::Info, 6.f)->show();
+                        Bot::get().status = "Folder path shown";
+#else
+                        geode::utils::file::openFolder(Bot::get().dir());
+#endif
+                    });
                     break;
                 }
                 case 3: { // Physics
@@ -227,8 +289,6 @@ namespace ivey {
                                  Bot::get().status = fmt::format("Speed set to x{:g}", cfg.speed);
                              });
                     check("Speedhack Audio", c.speedAudio);
-                    action("Accuracy Steps", nullptr, tpsText);
-                    editable("TPS", tpsValue, 1, 65535, setTps);
                     action("Step Budget", nullptr, [] { return fmt::format("{} ms", Bot::get().cfg.stepBudget); });
                     editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 250,
                              [](double v) {
@@ -295,21 +355,30 @@ namespace ivey {
                     break;
                 }
                 case 9: { // Search
+                    if (b.mergePending) {
+                        r.push_back(MenuRow{"Pick the macro to merge in", nullptr, nullptr, nullptr, nullptr});
+                    }
+
                     auto hits = searchHits(b, query);
                     constexpr size_t MAX_ROWS = 7;
-                    size_t shown = hits.size() > MAX_ROWS ? MAX_ROWS - 1 : hits.size();
+                    size_t shown = hits.size() > MAX_ROWS - 1 ? MAX_ROWS - 2 : hits.size();
 
                     for (size_t k = 0; k < shown; ++k) macroRow(r, hits[k]);
 
                     if (hits.empty()) {
                         r.push_back(MenuRow{query.empty() ? "No macros yet" : "No macros found", nullptr, nullptr, nullptr, nullptr});
                     }
-                    else if (hits.size() > MAX_ROWS) {
+                    else if (hits.size() > MAX_ROWS - 1) {
                         r.push_back(MenuRow{fmt::format("+{} more, keep typing", hits.size() - shown), nullptr, nullptr, nullptr, nullptr});
                     }
                     break;
                 }
                 default: break;
+            }
+
+            // Arrows are only for rows that step through values or settings.
+            for (auto& row : r) {
+                if (row.label == "Accent Color" || row.label == "Window Opacity") row.arrowIcon = true;
             }
 
             // Thin lines that group related rows.
@@ -412,10 +481,10 @@ namespace ivey {
         if (!CCRect(0.f, 0.f, W, H).containsPoint(local)) return false;
 
         m_drag = 0;
-        if (local.y > H - TITLE_H && local.x < W - 30.f) {
+        if (local.y > H - TITLE_H && local.x < W - 84.f) {
             m_drag = 1; // title bar moves the window
         }
-        else if (local.x > W - 24.f && local.y < 24.f) {
+        else if (local.x > W - 32.f && local.y < 32.f) {
             m_drag = 2; // corner resizes it
             m_dragFrom = touch->getLocation();
             m_scaleFrom = m_scale;
@@ -523,7 +592,7 @@ namespace ivey {
 
         // resize grip in the corner
         auto grip = CCDrawNode::create();
-        CCPoint tri[3] = {{W - 5.f, 5.f}, {W - 5.f, 15.f}, {W - 15.f, 5.f}};
+        CCPoint tri[3] = {{W - 5.f, 5.f}, {W - 5.f, 19.f}, {W - 19.f, 5.f}};
         grip->drawPolygon(tri, 3, ccc4f(0.45f, 0.45f, 0.45f, 1.f), 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
         m_root->addChild(grip, 2);
 
@@ -570,7 +639,8 @@ namespace ivey {
 
     std::string IveyMenu::structureKey() const {
         auto& bot = Bot::get();
-        return fmt::format("{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity, m_searchOpen);
+        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
+                           m_searchOpen, bot.macro.entries.empty(), bot.mergePending);
     }
 
     // Rebuilds happen on the next frame, never inside the tap that asked for them.
@@ -711,6 +781,26 @@ namespace ivey {
         auto closeItem = CCMenuItemSpriteExtra::create(closeNode, nullptr, this, menu_selector(IveyMenu::onClose));
         closeItem->setPosition({W - 18.f, H - TITLE_H / 2.f - 2.f});
         m_tabMenu->addChild(closeItem);
+
+        // smaller / bigger window
+        auto sizeButton = [&](char const* text, float x, int dir) {
+            auto node = CCNode::create();
+            node->setContentSize({18.f, 16.f});
+            node->setAnchorPoint({0.5f, 0.5f});
+            node->addChild(CCLayerColor::create({60, 60, 60, 255}, 18.f, 16.f));
+            auto l = CCLabelBMFont::create(text, fontName().c_str());
+            styleText(l, 0.5f);
+            l->setColor({225, 225, 225});
+            l->setPosition({9.f, 8.f});
+            node->addChild(l, 1);
+            auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(IveyMenu::onResize));
+            item->m_scaleMultiplier = 1.f;
+            item->setTag(dir);
+            item->setPosition({x, H - TITLE_H / 2.f - 2.f});
+            m_tabMenu->addChild(item);
+        };
+        sizeButton("-", W - 66.f, -1);
+        sizeButton("+", W - 44.f, 1);
     }
 
     void IveyMenu::rebuild() {
@@ -796,7 +886,7 @@ namespace ivey {
             item->setPosition({10.f + rowW / 2.f, y});
             m_content->addChild(item);
 
-            if (row.arrow || row.editApply) {
+            if (row.arrowIcon || row.editApply || row.textApply) {
                 // a small square with a triangle, like the original window
                 auto arrowNode = CCNode::create();
                 arrowNode->setContentSize({18.f, 18.f});
@@ -854,7 +944,12 @@ namespace ivey {
 
         if (row.get && row.set) row.set(!row.get());
         else if (row.arrow) row.arrow();
-        else if (row.editApply) openEditor(i);
+        else if (row.editApply || row.textApply) openEditor(i);
+
+        if (m_closeAfter) {
+            this->removeFromParentAndCleanup(true); // nothing may touch this menu after this
+            return;
+        }
 
         refreshRows(); // shows the change right now
         if (structureKey() != m_built) queue(false);
@@ -863,7 +958,7 @@ namespace ivey {
     void IveyMenu::onArrow(CCObject* sender) {
         size_t i = static_cast<size_t>(static_cast<CCNode*>(sender)->getTag());
         if (i >= m_rows.size()) return;
-        if (m_rows[i].editApply) openEditor(i);
+        if (m_rows[i].editApply || m_rows[i].textApply) openEditor(i);
         else if (m_rows[i].arrow) m_rows[i].arrow();
 
         refreshRows();
@@ -871,10 +966,11 @@ namespace ivey {
     }
 
     void IveyMenu::openEditor(size_t i) {
-        if (i >= m_rows.size() || !m_rows[i].editApply) return;
+        if (i >= m_rows.size() || (!m_rows[i].editApply && !m_rows[i].textApply)) return;
         closeEditor();
 
         auto& row = m_rows[i];
+        bool isText = static_cast<bool>(row.textApply);
         m_editIndex = static_cast<int>(i);
 
         m_editor = CCNode::create();
@@ -885,7 +981,7 @@ namespace ivey {
         m_editor->addChild(bar);
 
         auto title = CCLabelBMFont::create(
-            fmt::format("{}  ({:g} to {:g})", row.editTitle, row.editMin, row.editMax).c_str(),
+            (isText ? row.editTitle : fmt::format("{}  ({:g} to {:g})", row.editTitle, row.editMin, row.editMax)).c_str(),
             fontName().c_str()
         );
         styleText(title, 0.38f);
@@ -894,12 +990,13 @@ namespace ivey {
         title->setPosition({14.f, 62.f});
         m_editor->addChild(title, 2);
 
-        m_input = TextInput::create(120.f, "number");
-        m_input->setFilter("0123456789.");
-        m_input->setMaxCharCount(9);
+        m_input = TextInput::create(isText ? 260.f : 120.f, isText ? "name" : "number");
+        m_input->setFilter(isText ? "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-" : "0123456789.");
+        m_input->setMaxCharCount(isText ? 32 : 9);
         m_input->setScale(0.7f);
-        m_input->setPosition({56.f, 40.f});
-        m_input->setString(row.editValue ? row.editValue() : std::string());
+        m_input->setPosition({isText ? 14.f + 91.f : 56.f, 40.f});
+        m_input->setString(isText ? (row.textValue ? row.textValue() : std::string())
+                                  : (row.editValue ? row.editValue() : std::string()));
         m_editor->addChild(m_input, 2);
 
         auto menu = CCMenu::create();
@@ -977,6 +1074,7 @@ namespace ivey {
     void IveyMenu::onCloseSearch(CCObject*) {
         m_searchOpen = false;
         m_query.clear();
+        Bot::get().mergePending = false;
         m_tab = TAB_MACRO;
         queue(true);
     }
@@ -1000,6 +1098,20 @@ namespace ivey {
         auto& row = m_rows[m_editIndex];
 
         std::string text = m_input->getString();
+
+        if (row.textApply) {
+            // trim spaces at both ends
+            size_t first = text.find_first_not_of(' ');
+            size_t last = text.find_last_not_of(' ');
+            text = first == std::string::npos ? std::string() : text.substr(first, last - first + 1);
+
+            row.textApply(text);
+            m_editClose = true;
+            refreshRows();
+            queue(false);
+            return;
+        }
+
         char* end = nullptr;
         double v = std::strtod(text.c_str(), &end);
         if (text.empty() || end == text.c_str()) {
@@ -1017,6 +1129,19 @@ namespace ivey {
     void IveyMenu::onEditCancel(CCObject*) {
         m_editClose = true;
         queue(false);
+    }
+
+    void IveyMenu::onResize(CCObject* sender) {
+        int dir = static_cast<CCNode*>(sender)->getTag();
+        float next = std::clamp(m_scale + 0.1f * static_cast<float>(dir), 0.6f, 1.4f);
+
+        // keep the top left corner where it is
+        float top = m_root->getPositionY() + H * m_scale;
+        m_scale = next;
+        m_root->setScale(next);
+        m_root->setPositionY(top - H * next);
+        m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
+        saveWindow();
     }
 
     void IveyMenu::onClose(CCObject*) {
