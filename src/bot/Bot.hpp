@@ -66,6 +66,13 @@ namespace ivey {
         bool swiftBusy = false;
         float leftOver = 0.f; // time the TPS stepping has not used yet
         bool stepping = false; // true while the TPS loop is running its steps
+        double stepAdvance = 0.0; // level time one step really advances (measured)
+        bool tpsHonored = true;   // false if the game ignores the step size it is given
+
+        void resetStepping() {
+            leftOver = 0.f;
+            stepAdvance = 0.0;
+        }
 
         Config cfg;
         Mode mode = Mode::Idle;
@@ -80,6 +87,12 @@ namespace ivey {
         int selected = -1;
         std::string status = "Ready";
         std::string loadedName;
+        std::string customName;      // name picked for the next save (empty = level name)
+        int onlyPlayer = -1;         // next recording: -1 both, 0 = P1 only, 1 = P2 only
+        int continueFrame = -1;      // frame where a continued macro switches to recording
+        int keepFrame = -1;          // after a continue: inputs up to here come from the old macro and stay
+        bool continuing = false;     // fast-forwarding to that frame
+        bool mergePending = false;   // the next macro picked is merged into the loaded one
 
         // level hooks
         void onEnter(GJBaseGameLayer* gl);
@@ -109,6 +122,16 @@ namespace ivey {
         void refreshFiles();
         bool save();
         bool loadSelected();
+
+        // continue a loaded macro: replays it quickly, then records from its last input
+        bool startContinue();
+        void finishContinue(GJBaseGameLayer* gl);
+        uint32_t lastInputFrame() const;
+
+        // merge another macro (for example the P2 one) into the loaded macro
+        bool beginMerge();
+        bool mergeByName(std::string const& name);
+        geode::Result<Macro> readFile(std::filesystem::path const& path);
         bool loadByName(std::string const& name);
         bool deleteSelected();
         void step(int dir);

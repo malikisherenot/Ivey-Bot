@@ -43,6 +43,7 @@ namespace ivey {
                                  // bit 2 = frames are the game's own step count (macros from other bots)
         int32_t  levelID  = 0;
         std::string levelName; // kept in memory only, the file name carries it
+        int8_t onlyPlayer = -1; // memory only: 0 = recorded P1 only, 1 = P2 only, -1 = both
         std::vector<Entry> entries;
         std::vector<Check> checks;
 

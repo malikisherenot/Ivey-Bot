@@ -102,16 +102,27 @@ namespace ivey {
         checkCursor = 0;
         previousFrame = 0;
         syncHolds = false;
+        continuing = false;
+        continueFrame = -1;
+        keepFrame = -1;
+        mergePending = false;
     }
 
     void Bot::onReset(uint32_t frame) {
         previousFrame = 0;
         if (mode == Mode::Record) {
             // Drop everything from this frame onward so practice restarts stay clean.
+            // After a continue, the old part of the macro is never cut by a respawn at its end.
+            uint32_t cut = frame;
+            if (keepFrame >= 0) {
+                if (frame + 1 >= static_cast<uint32_t>(keepFrame)) cut = std::max(frame, static_cast<uint32_t>(keepFrame) + 1);
+                else keepFrame = -1; // restarted before the continue point, so this is a new take
+            }
+
             auto& e = macro.entries;
-            e.erase(std::remove_if(e.begin(), e.end(), [frame](Entry const& x) { return x.frame >= frame; }), e.end());
+            e.erase(std::remove_if(e.begin(), e.end(), [cut](Entry const& x) { return x.frame >= cut; }), e.end());
             auto& c = macro.checks;
-            c.erase(std::remove_if(c.begin(), c.end(), [frame](Check const& x) { return x.frame >= frame; }), c.end());
+            c.erase(std::remove_if(c.begin(), c.end(), [cut](Check const& x) { return x.frame >= cut; }), c.end());
         }
         else if (mode == Mode::Replay) {
             auto& e = macro.entries;
@@ -139,6 +150,8 @@ namespace ivey {
         uint8_t player = isPlayer1 ? 0 : 1;
         uint8_t input = static_cast<uint8_t>(button);
 
+        if (onlyPlayer >= 0 && player != onlyPlayer) return; // the other player is not recorded
+
         // Skip repeats of the same state.
         if (macro.lastState(player, input) == down) return;
 
@@ -157,6 +170,7 @@ namespace ivey {
         if (!cfg.correction || !gl) return;
 
         for (uint8_t p = 0; p < 2; ++p) {
+            if (onlyPlayer >= 0 && p != onlyPlayer) continue;
             PlayerObject* pl = p == 0 ? gl->m_player1 : gl->m_player2;
             if (!pl) continue;
             if (p == 1 && !pl->isVisible()) continue;
@@ -238,6 +252,7 @@ namespace ivey {
         }
 
         mode = m;
+        resetStepping();
         cursor = 0;
         checkCursor = 0;
         previousFrame = 0;
@@ -246,20 +261,27 @@ namespace ivey {
 
         if (m == Mode::Record) {
             revertSettings(); // a new recording uses your own settings
+            keepFrame = -1;
             macro = Macro();
+            macro.onlyPlayer = static_cast<int8_t>(onlyPlayer);
             macro.accuracy = static_cast<uint16_t>(cfg.tps);
             macro.flags = cfg.frameAccurate ? 1 : 0;
             if (auto pl = PlayLayer::get()) {
                 macro.levelID = pl->m_level->m_levelID.value();
                 macro.levelName = std::string(pl->m_level->m_levelName);
             }
-            status = "Recording, restart the level";
+            status = onlyPlayer == 0 ? "Recording P1 only, restart the level"
+                   : onlyPlayer == 1 ? "Recording P2 only, restart the level"
+                   : "Recording, restart the level";
         }
         else if (m == Mode::Replay) {
             applyMacroSettings();
             status = "Replaying, restart the level";
         }
         else {
+            continuing = false;
+            continueFrame = -1;
+            keepFrame = -1;
             status = "Stopped";
         }
     }
@@ -286,7 +308,7 @@ namespace ivey {
             backup.correction = cfg.correction;
         }
         cfg.tps = std::max<int>(macro.accuracy, 1);
-        leftOver = 0.f;
+        resetStepping();
         cfg.frameAccurate = (macro.flags & 1) != 0;
         cfg.correction = !macro.checks.empty();
     }
@@ -294,7 +316,7 @@ namespace ivey {
     void Bot::revertSettings() {
         if (!backup.active) return;
         cfg.tps = backup.tps;
-        leftOver = 0.f;
+        resetStepping();
         cfg.frameAccurate = backup.frameAccurate;
         cfg.correction = backup.correction;
         backup.active = false;
@@ -336,7 +358,7 @@ namespace ivey {
         // and nothing changes them while the bot is recording or replaying.
         if (!backup.active && !tpsLocked()) {
             cfg.tps = p.tps;
-            leftOver = 0.f;
+            resetStepping();
             cfg.frameAccurate = true;
             cfg.correction = p.correction;
         }
@@ -393,7 +415,7 @@ namespace ivey {
             return false;
         }
 
-        std::string levelName = macro.levelName;
+        std::string levelName = !customName.empty() ? customName : macro.levelName;
         if (levelName.empty()) {
             if (auto pl = PlayLayer::get()) levelName = std::string(pl->m_level->m_levelName);
         }
@@ -406,7 +428,8 @@ namespace ivey {
         }
         if (clean.empty()) clean = "macro";
 
-        std::string base = fmt::format("{}_{}", clean, macro.levelID);
+        std::string suffix = macro.onlyPlayer == 0 ? "_p1" : macro.onlyPlayer == 1 ? "_p2" : "";
+        std::string base = fmt::format("{}_{}{}", clean, macro.levelID, suffix);
         std::string name = base + ".ivey";
         for (int n = 2; std::filesystem::exists(dir() / name); ++n) {
             name = fmt::format("{}_{}.ivey", base, n);
@@ -423,7 +446,21 @@ namespace ivey {
             if (files[i] == path) selected = static_cast<int>(i);
         }
         status = "Saved " + name;
+        customName.clear(); // the name was for this save only
         return true;
+    }
+
+    Result<Macro> Bot::readFile(std::filesystem::path const& path) {
+        auto data = geode::utils::file::readBinary(path);
+        if (data.isErr()) return Err("Could not read file");
+
+        auto const& bytes = data.unwrap();
+        if (looksLikeGdr2(bytes)) return importGdr2(bytes);
+        if (looksLikeJson(bytes)) return importGdrJson(bytes);
+        if (bytes.size() >= 8 && bytes[4] == 'I' && bytes[5] == 'V' && bytes[6] == 'E' && bytes[7] == 'Y') {
+            return Macro::decode(bytes);
+        }
+        return importGdr1(bytes);
     }
 
     bool Bot::loadSelected() {
@@ -437,21 +474,7 @@ namespace ivey {
             return false;
         }
 
-        auto data = geode::utils::file::readBinary(files[selected]);
-        if (data.isErr()) {
-            status = "Could not read file";
-            return false;
-        }
-
-        auto const& bytes = data.unwrap();
-        auto res = [&]() -> Result<Macro> {
-            if (looksLikeGdr2(bytes)) return importGdr2(bytes);
-            if (looksLikeJson(bytes)) return importGdrJson(bytes);
-            if (bytes.size() >= 8 && bytes[4] == 'I' && bytes[5] == 'V' && bytes[6] == 'E' && bytes[7] == 'Y') {
-                return Macro::decode(bytes);
-            }
-            return importGdr1(bytes);
-        }();
+        auto res = readFile(files[selected]);
         if (res.isErr()) {
             status = res.unwrapErr();
             return false;
@@ -480,6 +503,178 @@ namespace ivey {
         }
         status = "Macro not found";
         return false;
+    }
+
+    uint32_t Bot::lastInputFrame() const {
+        uint32_t last = 0;
+        for (auto const& e : macro.entries) last = std::max(last, e.frame);
+        return last;
+    }
+
+    // Continue: replays the loaded macro fast, then keeps recording from its last input.
+    bool Bot::startContinue() {
+        if (tpsLocked()) {
+            status = "Stop the bot first";
+            return false;
+        }
+        if (macro.entries.empty()) {
+            status = "Load a macro first";
+            return false;
+        }
+        auto pl = PlayLayer::get();
+        if (!pl) {
+            status = "Open the level first";
+            return false;
+        }
+        if (macro.levelID != 0 && macro.levelID != pl->m_level->m_levelID.value()) {
+            status = "This macro is for another level";
+            return false;
+        }
+
+        continueFrame = static_cast<int>(lastInputFrame());
+        continuing = true;
+        setMode(Mode::Replay);
+        if (mode != Mode::Replay) {
+            continuing = false;
+            continueFrame = -1;
+            return false;
+        }
+
+        // leave the pause menu, then start from the beginning
+        if (pl->m_isPaused) {
+            if (auto scene = CCDirector::get()->getRunningScene()) {
+                if (auto pause = scene->getChildByType<PauseLayer>(0)) pause->onResume(nullptr);
+            }
+        }
+        pl->resetLevelFromStart();
+        status = "Continuing...";
+        return true;
+    }
+
+    void Bot::finishContinue(GJBaseGameLayer* gl) {
+        uint32_t target = static_cast<uint32_t>(std::max(continueFrame, 0));
+        continueFrame = -1;
+        continuing = false;
+
+        macro.entries.erase(std::remove_if(macro.entries.begin(), macro.entries.end(),
+                                           [target](Entry const& e) { return e.frame > target; }), macro.entries.end());
+        macro.checks.erase(std::remove_if(macro.checks.begin(), macro.checks.end(),
+                                          [target](Check const& c) { return c.frame > target; }), macro.checks.end());
+
+        // buttons the macro still holds are let go, so the new part starts clean
+        bool held[2][4] = {};
+        for (uint8_t p = 0; p < 2; ++p) {
+            for (uint8_t i = 1; i <= 3; ++i) held[p][i] = macro.lastState(p, i);
+        }
+
+        mode = Mode::Record; // keeps the macro, unlike setMode
+        keepFrame = static_cast<int>(target);
+        macro.onlyPlayer = -1;
+        cursor = 0;
+        checkCursor = 0;
+        syncHolds = false;
+
+        for (uint8_t p = 0; p < 2; ++p) {
+            for (uint8_t i = 1; i <= 3; ++i) {
+                if (held[p][i]) gl->handleButton(false, i, p == 0); // recorded by the input hook
+            }
+        }
+
+        status = fmt::format("Recording from frame {}", target);
+
+        // practice mode with a checkpoint here, so a death restarts from this point
+        Loader::get()->queueInMainThread([] {
+            if (auto pl = PlayLayer::get()) {
+                if (!pl->m_isPracticeMode) pl->togglePracticeMode(true);
+                pl->markCheckpoint();
+                pl->pauseGame(false);
+            }
+        });
+    }
+
+    bool Bot::beginMerge() {
+        if (tpsLocked()) {
+            status = "Stop the bot first";
+            return false;
+        }
+        if (macro.entries.empty()) {
+            status = "Load a macro first";
+            return false;
+        }
+        mergePending = true;
+        status = "Pick the macro to merge in";
+        return true;
+    }
+
+    // Puts the inputs of two macros together (P1 from one, P2 from the other).
+    bool Bot::mergeByName(std::string const& name) {
+        mergePending = false;
+        if (tpsLocked()) {
+            status = "Stop the bot first";
+            return false;
+        }
+        if (macro.entries.empty()) {
+            status = "Load a macro first";
+            return false;
+        }
+
+        refreshFiles();
+        std::filesystem::path path;
+        for (auto const& f : files) if (f.filename().string() == name) path = f;
+        if (path.empty()) {
+            status = "Macro not found";
+            return false;
+        }
+
+        auto res = readFile(path);
+        if (res.isErr()) {
+            status = res.unwrapErr();
+            return false;
+        }
+        auto other = std::move(res.unwrap());
+
+        if (other.accuracy != macro.accuracy) {
+            status = fmt::format("TPS differs ({} and {})", macro.accuracy, other.accuracy);
+            return false;
+        }
+        if (macro.levelID != 0 && other.levelID != 0 && macro.levelID != other.levelID) {
+            status = "These macros are for different levels";
+            return false;
+        }
+        if ((macro.flags & 4) != (other.flags & 4)) {
+            status = "These macros count frames differently";
+            return false;
+        }
+
+        size_t before = macro.entries.size();
+
+        auto inputs = macro.entries;
+        inputs.insert(inputs.end(), other.entries.begin(), other.entries.end());
+        std::stable_sort(inputs.begin(), inputs.end(), [](Entry const& a, Entry const& b) { return a.frame < b.frame; });
+        inputs.erase(std::unique(inputs.begin(), inputs.end(), [](Entry const& a, Entry const& b) {
+            return a.frame == b.frame && a.input == b.input && a.state == b.state && a.player == b.player;
+        }), inputs.end());
+
+        auto checks = macro.checks;
+        checks.insert(checks.end(), other.checks.begin(), other.checks.end());
+        std::stable_sort(checks.begin(), checks.end(), [](Check const& a, Check const& b) {
+            return a.frame != b.frame ? a.frame < b.frame : a.player < b.player;
+        });
+        checks.erase(std::unique(checks.begin(), checks.end(), [](Check const& a, Check const& b) {
+            return a.frame == b.frame && a.player == b.player;
+        }), checks.end());
+
+        macro.entries = std::move(inputs);
+        macro.checks = std::move(checks);
+        macro.onlyPlayer = -1;
+        if (macro.levelID == 0) macro.levelID = other.levelID;
+        if (macro.levelName.empty()) macro.levelName = other.levelName;
+        cursor = 0;
+        checkCursor = 0;
+        loadedName.clear(); // it is a new macro now, not the file it came from
+
+        status = fmt::format("Merged: {} + {} inputs", before, other.entries.size());
+        return true;
     }
 
     bool Bot::deleteSelected() {

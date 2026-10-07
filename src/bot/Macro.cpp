@@ -16,11 +16,6 @@ namespace ivey {
         void put32(std::vector<uint8_t>& o, uint32_t v) {
             for (int i = 0; i < 4; ++i) o.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
         }
-        void putF(std::vector<uint8_t>& o, float v) {
-            uint32_t u;
-            std::memcpy(&u, &v, 4);
-            put32(o, u);
-        }
         void putVar(std::vector<uint8_t>& o, uint64_t v) {
             while (v >= 0x80) {
                 o.push_back(static_cast<uint8_t>((v & 0x7F) | 0x80));
