@@ -1,5 +1,21 @@
 # Ivey Bot Changelog
 
+## v1.10.0
+
+- Macro names
+- Continue macro
+- Bot P1 only and 2P only
+- Merge macros
+
+## v1.9.2
+
+- TPS no longer speeds up the game
+- Macro TPS applies only while botting
+- Resize buttons
+- Smaller menu button
+- Open Folder no longer crashes phones
+- Removed extra options and arrows
+
 ## v1.9.1
 
 - Trajectory outside the step budget
