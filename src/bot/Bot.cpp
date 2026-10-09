@@ -25,6 +25,12 @@ namespace ivey {
         swift         = m->getSavedValue<bool>("swift", false);
         swiftClicks   = m->getSavedValue<int>("swift-clicks", 2);
         swiftSmart    = m->getSavedValue<bool>("swift-smart", false);
+        renderWidth   = m->getSavedValue<int>("render-width", 1920);
+        renderHeight  = m->getSavedValue<int>("render-height", 1080);
+        renderFps     = m->getSavedValue<int>("render-fps", 60);
+        renderBitrate = m->getSavedValue<int>("render-bitrate", 30);
+        renderTail    = m->getSavedValue<int>("render-tail", 2);
+        renderCodec   = m->getSavedValue<std::string>("render-codec", "");
         corrInterval  = m->getSavedValue<int>("corr-interval", 8);
         waveInterval  = m->getSavedValue<int>("wave-interval", 1);
         stepBudget    = m->getSavedValue<int>("step-budget", 33);
@@ -48,6 +54,11 @@ namespace ivey {
         if (waveInterval < 1 || waveInterval > 10000) waveInterval = 1;
         if (trajectoryLength < 2 || trajectoryLength > 2000) trajectoryLength = 500;
         if (swiftClicks < 1 || swiftClicks > 100) swiftClicks = 2;
+        if (renderWidth < 16 || renderWidth > 16384) renderWidth = 1920;
+        if (renderHeight < 16 || renderHeight > 16384) renderHeight = 1080;
+        if (renderFps < 1 || renderFps > 240) renderFps = 60;
+        if (renderBitrate < 1 || renderBitrate > 500) renderBitrate = 30;
+        if (renderTail < 0 || renderTail > 60) renderTail = 2;
 
         if (stepBudget < 1 || stepBudget > 250) stepBudget = 33;
         if (speed < 0.01f || speed > 1000.f) speed = 1.f;
@@ -70,6 +81,12 @@ namespace ivey {
         m->setSavedValue("swift", swift);
         m->setSavedValue("swift-clicks", swiftClicks);
         m->setSavedValue("swift-smart", swiftSmart);
+        m->setSavedValue("render-width", renderWidth);
+        m->setSavedValue("render-height", renderHeight);
+        m->setSavedValue("render-fps", renderFps);
+        m->setSavedValue("render-bitrate", renderBitrate);
+        m->setSavedValue("render-tail", renderTail);
+        m->setSavedValue("render-codec", renderCodec);
         m->setSavedValue("corr-interval", corrInterval);
         m->setSavedValue("wave-interval", waveInterval);
         m->setSavedValue("step-budget", stepBudget);

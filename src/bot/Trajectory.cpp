@@ -1,5 +1,6 @@
 #include "Trajectory.hpp"
 #include "Bot.hpp"
+#include "../render/Renderer.hpp"
 
 #include <Geode/modify/EffectGameObject.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
@@ -154,7 +155,7 @@ namespace ivey {
 
         if (!m_node || !m_copy[0] || !m_copy[1] || !pl) return;
 
-        if (!cfg.trajectory || !pl->m_player1 || pl->m_player1->m_isDead) {
+        if (!cfg.trajectory || ivey::Renderer::get().active() || !pl->m_player1 || pl->m_player1->m_isDead) {
             if (m_node->isVisible()) {
                 m_node->clear();
                 m_node->setVisible(false);
@@ -273,6 +274,7 @@ class $modify(IveyTrajectoryLayer, PlayLayer) {
     }
 
     void onQuit() {
+        ivey::Renderer::get().stop(true, "Left the level");
         Trajectory::get().teardown();
         PlayLayer::onQuit();
     }

@@ -25,6 +25,12 @@ namespace ivey {
         bool swift = false;
         int  swiftClicks = 2;
         bool swiftSmart = false;
+        int  renderWidth = 1920;
+        int  renderHeight = 1080;
+        int  renderFps = 60;
+        int  renderBitrate = 30;   // Mbps
+        int  renderTail = 2;       // seconds recorded after the level ends
+        std::string renderCodec;   // empty = pick one automatically
         int  corrInterval = 8;
         int  waveInterval = 1;
         int  stepBudget = 33; // ms of stepping allowed per screen frame
