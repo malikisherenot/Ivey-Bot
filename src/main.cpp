@@ -11,6 +11,7 @@
 
 #include "bot/Bot.hpp"
 #include "bot/Trajectory.hpp"
+#include "render/Renderer.hpp"
 #include "ui/IveyMenu.hpp"
 
 // Built-in copy of resources/ivey-menu.png, used if the resource file can't be found.
@@ -301,6 +302,7 @@ namespace {
         int m_lastProgress = 0;
         std::chrono::steady_clock::time_point m_lastTime = std::chrono::steady_clock::now();
         float m_running = 0.f;
+        CCMenu* m_renderMenu = nullptr;
 
     public:
         static Overlay* create() {
@@ -348,13 +350,43 @@ namespace {
             addButton("Play", 146.f, 0);
             m_steps->setVisible(false);
 
+            // Stop button, only while rendering
+            m_renderMenu = CCMenu::create();
+            m_renderMenu->setPosition({0.f, 0.f});
+            this->addChild(m_renderMenu);
+            {
+                auto node = CCNode::create();
+                node->setContentSize({60.f, 24.f});
+                node->setAnchorPoint({0.5f, 0.5f});
+                node->addChild(CCLayerColor::create({90, 22, 22, 220}, 60.f, 24.f));
+                auto l = CCLabelBMFont::create("Stop", ivey::fontName().c_str());
+                ivey::styleText(l, 0.5f);
+                l->setPosition({30.f, 12.f});
+                node->addChild(l, 1);
+                auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(Overlay::onStep));
+                item->setTag(99);
+                item->setPosition({40.f, 30.f});
+                m_renderMenu->addChild(item);
+            }
+            m_renderMenu->setVisible(false);
+
             this->scheduleUpdate();
             return true;
+        }
+
+        // Never part of the video, but visible on screen.
+        void visit() override {
+            if (ivey::Renderer::get().capturing()) return;
+            CCNode::visit();
         }
 
         void onStep(CCObject* sender) {
             int n = static_cast<CCNode*>(sender)->getTag();
             auto& bot = Bot::get();
+            if (n == 99) {
+                ivey::Renderer::get().stop(true, "Render stopped");
+                return;
+            }
             if (n == 0) {
                 bot.cfg.stepper = false;
                 bot.stepsPending = 0;
@@ -369,6 +401,14 @@ namespace {
             auto& bot = Bot::get();
             auto& cfg = bot.cfg;
             auto pl = PlayLayer::get();
+
+            auto& render = ivey::Renderer::get();
+            m_renderMenu->setVisible(pl && render.active());
+            if (render.active()) {
+                m_steps->setVisible(false);
+                m_label->setString(("Rendering " + render.progress()).c_str());
+                return;
+            }
 
             // How many physics steps really happen per second (not just the setting).
             if (pl) {
@@ -506,7 +546,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         if (realDt > dt && newDt < dt) realDt = dt;
 
         auto startTime = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> budget(static_cast<double>(bot.cfg.stepBudget));
+        std::chrono::duration<double, std::milli> budget(ivey::Renderer::get().active() ? 1.0e7 : static_cast<double>(bot.cfg.stepBudget));
 
         // How much level time one call really advances. It should be 1 / TPS.
         // If the game ignores the step size it is given, counting what really
@@ -624,6 +664,10 @@ class $modify(IveyPlayLayer, PlayLayer) {
         PlayLayer::resetLevel();
         Bot::get().safeMode = false; // every attempt starts clean
         Bot::get().onReset(frameOf(this));
+
+        auto& render = ivey::Renderer::get();
+        if (render.starting()) render.begin(this);
+        else if (render.active()) render.onRestart();
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* object) {
@@ -647,6 +691,7 @@ class $modify(IveyPlayLayer, PlayLayer) {
         if (bot.cfg.autoSafe && bot.safeMode) m_isTestMode = true;
 
         bot.onComplete();
+        ivey::Renderer::get().onLevelEnd();
         PlayLayer::levelComplete();
 
         m_isTestMode = wasTestMode;
@@ -672,8 +717,21 @@ class $modify(IveySpeed, CCScheduler) {
         bool fast = bot.continuing;
         bool on = cfg.speedhack;
         float speed = fast ? 5.f : (on ? cfg.speed : 1.f);
+
+        // Rendering: the game moves exactly one video frame per screen frame,
+        // however long drawing and encoding take.
+        auto& render = ivey::Renderer::get();
+        bool rendering = render.active();
+        if (rendering) {
+            dt = 1.f / static_cast<float>(render.fps());
+            speed = 1.f;
+            on = false;
+        }
+
         CCScheduler::update(dt * speed);
         if (on && cfg.speed != 1.f && PlayLayer::get()) bot.safeMode = true;
+
+        if (rendering) render.tick();
 
         static float lastPitch = 1.f;
         float pitch = (!fast && on && cfg.speedAudio) ? std::clamp(cfg.speed, 0.1f, 4.f) : 1.f;
