@@ -8,7 +8,7 @@
 	},
 	"id": "itzmalikhere.malik",
 	"name": "Ivey Bot",
-	"version": "v1.10.0",
+	"version": "v1.11.0",
 	"developer": "itzmalikhere",
 	"description": "Frame-accurate macro bot.",
 	"tags": [
@@ -24,6 +24,12 @@
 				"path": "resources/Abel-Regular.ttf",
 				"size": 48
 			}
+		}
+	},
+	"dependencies": {
+		"eclipse.ffmpeg-api": {
+			"version": ">=v2.0.0",
+			"importance": "recommended"
 		}
 	}
 }

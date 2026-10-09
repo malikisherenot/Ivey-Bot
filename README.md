@@ -48,6 +48,10 @@ Put `.gdr`, `.gdr.json` and `.gdr2` files in the macros folder and search for th
 
 Shows where the player will go if you hold or release. It runs a copy of the player through the real level, so nothing in the game changes. Other features can reuse it: `ivey::Trajectory::get().simulate(...)` takes any input sequence and returns the path, whether it died and where.
 
+## Rendering
+
+Needs the [FFmpeg API](https://geode-sdk.org/mods/eclipse.ffmpeg-api) mod. Load a macro, open the level, then use **Render > Start Rendering**. Videos are saved in the mod's `renders` folder. This version has no audio.
+
 ## Credits
 
 Swift Clicks idea by Ayumi.

@@ -1,5 +1,9 @@
 # Ivey Bot Changelog
 
+## v1.11.0
+
+- Renderer (video, no audio yet)
+
 ## v1.10.0
 
 - Macro names
