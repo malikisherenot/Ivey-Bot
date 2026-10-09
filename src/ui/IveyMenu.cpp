@@ -1,5 +1,6 @@
 #include "IveyMenu.hpp"
 #include "../bot/Bot.hpp"
+#include "../render/Renderer.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -23,11 +24,12 @@ namespace ivey {
         constexpr int TAB_MACRO = 2;
         constexpr int TAB_TRAJECTORY = 8;
         constexpr int TAB_SEARCH = 9;
+        constexpr int TAB_RENDER = 10;
         const char* TAB_NAMES[] = {"Gameplay", "Bot", "Macro", "Physics", "Presets", "Visual",
-                                   "Theme", "Labels", "Trajectory", "Search"};
+                                   "Theme", "Labels", "Trajectory", "Search", "Render"};
 
         std::vector<int> tabOrder(bool searchOpen) {
-            std::vector<int> order = {0, TAB_TRAJECTORY, 1, TAB_MACRO};
+            std::vector<int> order = {0, TAB_TRAJECTORY, TAB_RENDER, 1, TAB_MACRO};
             if (searchOpen) order.push_back(TAB_SEARCH);
             for (int id : {3, 4, 5, 6, 7}) order.push_back(id);
             return order;
@@ -354,6 +356,73 @@ namespace ivey {
                     r.push_back(MenuRow{"Runs do not count while it is on", nullptr, nullptr, nullptr, nullptr});
                     break;
                 }
+                case 10: { // Render
+                    auto& rd = Renderer::get();
+
+                    if (!rd.available()) {
+                        r.push_back(MenuRow{"FFmpeg API mod is missing", nullptr, nullptr, nullptr, nullptr});
+                    }
+
+                    if (rd.active()) {
+                        action("Stop Rendering", [] { Renderer::get().stop(true, "Render stopped"); },
+                               [] { return Renderer::get().progress(); });
+                    }
+                    else {
+                        action("Start Rendering", [] {
+                            if (Renderer::get().start()) {
+                                if (auto m = IveyMenu::get()) m->closeSoon();
+                            }
+                        });
+                    }
+                    r.back().box = true;
+
+                    action("Resolution", [] {
+                        static const int sizes[][2] = {{1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}};
+                        auto& cfg = Bot::get().cfg;
+                        int idx = -1;
+                        for (int k = 0; k < 4; ++k) if (sizes[k][0] == cfg.renderWidth && sizes[k][1] == cfg.renderHeight) idx = k;
+                        idx = (idx + 1) % 4;
+                        cfg.renderWidth = sizes[idx][0];
+                        cfg.renderHeight = sizes[idx][1];
+                        cfg.save();
+                    }, [] { return fmt::format("{}x{}", Bot::get().cfg.renderWidth, Bot::get().cfg.renderHeight); });
+
+                    action("Width", nullptr, [] { return std::to_string(Bot::get().cfg.renderWidth); });
+                    editable("Video width", [] { return std::to_string(Bot::get().cfg.renderWidth); }, 16, 16384,
+                             [](double v) { auto& c = Bot::get().cfg; c.renderWidth = static_cast<int>(std::lround(v)); c.save(); });
+
+                    action("Height", nullptr, [] { return std::to_string(Bot::get().cfg.renderHeight); });
+                    editable("Video height", [] { return std::to_string(Bot::get().cfg.renderHeight); }, 16, 16384,
+                             [](double v) { auto& c = Bot::get().cfg; c.renderHeight = static_cast<int>(std::lround(v)); c.save(); });
+
+                    action("FPS", nullptr, [] { return std::to_string(Bot::get().cfg.renderFps); });
+                    editable("Frames per second", [] { return std::to_string(Bot::get().cfg.renderFps); }, 1, 240,
+                             [](double v) { auto& c = Bot::get().cfg; c.renderFps = static_cast<int>(std::lround(v)); c.save(); });
+
+                    action("Bitrate", nullptr, [] { return fmt::format("{} Mbps", Bot::get().cfg.renderBitrate); });
+                    editable("Bitrate (Mbps)", [] { return std::to_string(Bot::get().cfg.renderBitrate); }, 1, 500,
+                             [](double v) { auto& c = Bot::get().cfg; c.renderBitrate = static_cast<int>(std::lround(v)); c.save(); });
+
+                    action("Seconds After End", nullptr, [] { return std::to_string(Bot::get().cfg.renderTail); });
+                    editable("Seconds recorded after the level ends", [] { return std::to_string(Bot::get().cfg.renderTail); }, 0, 60,
+                             [](double v) { auto& c = Bot::get().cfg; c.renderTail = static_cast<int>(std::lround(v)); c.save(); });
+
+                    action("Codec", [] {
+                        auto list = Renderer::get().codecs();
+                        auto& cfg = Bot::get().cfg;
+                        if (list.empty()) return;
+                        // "" = automatic, then every encoder that was found
+                        int idx = 0;
+                        for (size_t k = 0; k < list.size(); ++k) if (list[k] == cfg.renderCodec) idx = static_cast<int>(k) + 1;
+                        idx = (idx + 1) % (static_cast<int>(list.size()) + 1);
+                        cfg.renderCodec = idx == 0 ? std::string() : list[idx - 1];
+                        cfg.save();
+                    }, [] {
+                        auto const& c = Bot::get().cfg.renderCodec;
+                        return c.empty() ? std::string("auto") : c;
+                    });
+                    break;
+                }
                 case 9: { // Search
                     if (b.mergePending) {
                         r.push_back(MenuRow{"Pick the macro to merge in", nullptr, nullptr, nullptr, nullptr});
@@ -378,7 +447,7 @@ namespace ivey {
 
             // Arrows are only for rows that step through values or settings.
             for (auto& row : r) {
-                if (row.label == "Accent Color" || row.label == "Window Opacity") row.arrowIcon = true;
+                if (row.label == "Accent Color" || row.label == "Window Opacity" || row.label == "Resolution" || row.label == "Codec") row.arrowIcon = true;
             }
 
             // Thin lines that group related rows.
@@ -640,7 +709,8 @@ namespace ivey {
     std::string IveyMenu::structureKey() const {
         auto& bot = Bot::get();
         return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
-                           m_searchOpen, bot.macro.entries.empty(), bot.mergePending);
+                           m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
+               (Renderer::get().active() ? "|r" : "|-") + (Renderer::get().available() ? "a" : "x");
     }
 
     // Rebuilds happen on the next frame, never inside the tap that asked for them.
