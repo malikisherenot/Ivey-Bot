@@ -31,7 +31,7 @@ namespace ivey {
         int  renderBitrate = 30;   // Mbps
         int  renderTail = 2;       // seconds recorded after the level ends
         std::string renderCodec;   // empty = pick one automatically
-        int  corrInterval = 8;
+        int  corrInterval = 4;
         int  waveInterval = 1;
         int  stepBudget = 33; // ms of stepping allowed per screen frame
         int  tps = 240;

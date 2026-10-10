@@ -16,7 +16,10 @@ namespace ivey {
     //       next:  varint (gap << 1 | zero), and if zero is 0: zigzag dx | zigzag dy
     //     gap = frames since the last check - 1, dx/dy = miss against the straight-line guess
     //     zero = 1 means the guess was exactly right, nothing else is stored
-    constexpr uint8_t  FORMAT_VERSION = 3;
+    //   v4: same as v3, plus the vertical speed of the player (1/128 units)
+    //       first: ... | varint hasSpeed | (if 1) zigzag speed
+    //       next:  varint (gap << 2 | hasSpeed << 1 | zero), ..., then (if hasSpeed) zigzag speed change
+    constexpr uint8_t  FORMAT_VERSION = 4;
     constexpr size_t   HEADER_SIZE    = 16;
     constexpr size_t   ENTRY_SIZE     = 7;
     constexpr size_t   CHECK_SIZE     = 17;
@@ -35,6 +38,7 @@ namespace ivey {
         float    x      = 0.f;
         float    y      = 0.f;
         float    yVel   = 0.f;
+        bool     vel    = false; // yVel was recorded (checks from other bots have none)
     };
 
     struct Macro {

@@ -7,7 +7,8 @@ using namespace geode::prelude;
 
 namespace ivey {
     namespace {
-        constexpr double POS_SCALE = 32.0; // positions are stored in 1/32 units
+        constexpr double POS_SCALE = 32.0;  // positions are stored in 1/32 units
+        constexpr double VEL_SCALE = 128.0; // vertical speed is stored in 1/128 units
 
         void put16(std::vector<uint8_t>& o, uint16_t v) {
             o.push_back(static_cast<uint8_t>(v & 0xFF));
@@ -90,17 +91,21 @@ namespace ivey {
             putVar(o, track.size());
 
             int64_t q1x = 0, q1y = 0, q2x = 0, q2y = 0;
+            int64_t lastV = 0;
             uint32_t prevFrame = 0;
 
             for (size_t i = 0; i < track.size(); ++i) {
                 Check const& c = *track[i];
                 int64_t qx = std::llround(static_cast<double>(c.x) * POS_SCALE);
                 int64_t qy = std::llround(static_cast<double>(c.y) * POS_SCALE);
+                int64_t qv = c.vel ? std::llround(static_cast<double>(c.yVel) * VEL_SCALE) : 0;
 
                 if (i == 0) {
                     putVar(o, c.frame);
                     putVar(o, zig(qx));
                     putVar(o, zig(qy));
+                    putVar(o, c.vel ? 1u : 0u);
+                    if (c.vel) putVar(o, zig(qv));
                 }
                 else {
                     // Guess: keep moving the same way as the last two checks.
@@ -111,13 +116,15 @@ namespace ivey {
                     bool zero = rx == 0 && ry == 0;
 
                     uint64_t gap = static_cast<uint64_t>(c.frame - prevFrame - 1);
-                    putVar(o, (gap << 1) | (zero ? 1u : 0u));
+                    putVar(o, (gap << 2) | (c.vel ? 2u : 0u) | (zero ? 1u : 0u));
                     if (!zero) {
                         putVar(o, zig(rx));
                         putVar(o, zig(ry));
                     }
+                    if (c.vel) putVar(o, zig(qv - lastV));
                 }
 
+                if (c.vel) lastV = qv;
                 q2x = q1x; q2y = q1y;
                 q1x = qx;  q1y = qy;
                 prevFrame = c.frame;
@@ -180,11 +187,13 @@ namespace ivey {
             if (!getVar(p, end, n) || n > static_cast<uint64_t>(end - p)) return Err("File is cut off");
 
             int64_t q1x = 0, q1y = 0, q2x = 0, q2y = 0;
+            int64_t lastV = 0;
             uint32_t prevFrame = 0;
 
             for (uint64_t i = 0; i < n; ++i) {
                 uint32_t frame = 0;
-                int64_t qx = 0, qy = 0;
+                int64_t qx = 0, qy = 0, qv = 0;
+                bool hasVel = false;
                 uint64_t a = 0, b = 0, c2 = 0;
 
                 if (i == 0) {
@@ -192,11 +201,23 @@ namespace ivey {
                     frame = static_cast<uint32_t>(a);
                     qx = unzig(b);
                     qy = unzig(c2);
+                    if (version >= 4) {
+                        uint64_t hv = 0;
+                        if (!getVar(p, end, hv)) return Err("File is cut off");
+                        if (hv != 0) {
+                            uint64_t v = 0;
+                            if (!getVar(p, end, v)) return Err("File is cut off");
+                            hasVel = true;
+                            qv = unzig(v);
+                        }
+                    }
                 }
                 else {
                     if (!getVar(p, end, a)) return Err("File is cut off");
                     bool zero = (a & 1) != 0;
-                    frame = prevFrame + static_cast<uint32_t>(a >> 1) + 1;
+                    uint64_t gapPart = version >= 4 ? (a >> 2) : (a >> 1);
+                    hasVel = version >= 4 && (a & 2) != 0;
+                    frame = prevFrame + static_cast<uint32_t>(gapPart) + 1;
 
                     int64_t rx = 0, ry = 0;
                     if (!zero) {
@@ -208,6 +229,11 @@ namespace ivey {
                     int64_t py = i == 1 ? q1y : 2 * q1y - q2y;
                     qx = px + rx;
                     qy = py + ry;
+                    if (hasVel) {
+                        uint64_t v = 0;
+                        if (!getVar(p, end, v)) return Err("File is cut off");
+                        qv = lastV + unzig(v);
+                    }
                 }
 
                 Check c;
@@ -215,6 +241,11 @@ namespace ivey {
                 c.player = player;
                 c.x = static_cast<float>(static_cast<double>(qx) / POS_SCALE);
                 c.y = static_cast<float>(static_cast<double>(qy) / POS_SCALE);
+                if (hasVel) {
+                    c.vel = true;
+                    c.yVel = static_cast<float>(static_cast<double>(qv) / VEL_SCALE);
+                    lastV = qv;
+                }
                 m.checks.push_back(c);
 
                 q2x = q1x; q2y = q1y;

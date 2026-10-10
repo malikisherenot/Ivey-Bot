@@ -2,6 +2,7 @@
 #include "Import.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <ctime>
 
 using namespace geode::prelude;
@@ -31,7 +32,7 @@ namespace ivey {
         renderBitrate = m->getSavedValue<int>("render-bitrate", 30);
         renderTail    = m->getSavedValue<int>("render-tail", 2);
         renderCodec   = m->getSavedValue<std::string>("render-codec", "");
-        corrInterval  = m->getSavedValue<int>("corr-interval", 8);
+        corrInterval  = m->getSavedValue<int>("corr-interval", 4);
         waveInterval  = m->getSavedValue<int>("wave-interval", 1);
         stepBudget    = m->getSavedValue<int>("step-budget", 33);
         if (stepBudget == 12 || stepBudget == 17) stepBudget = 33; // the old defaults
@@ -50,7 +51,7 @@ namespace ivey {
         accent        = m->getSavedValue<int>("accent", 0);
         opacity       = m->getSavedValue<int>("opacity", 1);
         if (tps < 1 || tps > 65535) tps = 240;
-        if (corrInterval < 1 || corrInterval > 10000) corrInterval = 8;
+        if (corrInterval < 1 || corrInterval > 10000) corrInterval = 4;
         if (waveInterval < 1 || waveInterval > 10000) waveInterval = 1;
         if (trajectoryLength < 2 || trajectoryLength > 2000) trajectoryLength = 500;
         if (swiftClicks < 1 || swiftClicks > 100) swiftClicks = 2;
@@ -140,6 +141,21 @@ namespace ivey {
             e.erase(std::remove_if(e.begin(), e.end(), [cut](Entry const& x) { return x.frame >= cut; }), e.end());
             auto& c = macro.checks;
             c.erase(std::remove_if(c.begin(), c.end(), [cut](Check const& x) { return x.frame >= cut; }), c.end());
+
+            // A respawn lets go of every button. If the cut removed a release, the macro would still
+            // think the button is held and would throw away the next click as a repeat.
+            for (uint8_t p = 0; p < 2; ++p) {
+                if (onlyPlayer >= 0 && p != onlyPlayer) continue;
+                for (uint8_t b = 1; b <= 3; ++b) {
+                    if (!macro.lastState(p, b)) continue;
+                    Entry rel;
+                    rel.frame = cut;
+                    rel.input = b;
+                    rel.state = 0;
+                    rel.player = p;
+                    e.push_back(rel);
+                }
+            }
         }
         else if (mode == Mode::Replay) {
             auto& e = macro.entries;
@@ -167,7 +183,9 @@ namespace ivey {
         uint8_t player = isPlayer1 ? 0 : 1;
         uint8_t input = static_cast<uint8_t>(button);
 
-        if (onlyPlayer >= 0 && player != onlyPlayer) return; // the other player is not recorded
+        // In a one-player level a click drives both players (dual mode), so both are kept.
+        bool single = onlyPlayer >= 0 && gl && gl->m_levelSettings && !gl->m_levelSettings->m_twoPlayerMode;
+        if (onlyPlayer >= 0 && !single && player != onlyPlayer) return; // the other player is not recorded
 
         // Skip repeats of the same state.
         if (macro.lastState(player, input) == down) return;
@@ -186,8 +204,9 @@ namespace ivey {
     void Bot::snapshot(GJBaseGameLayer* gl, uint32_t frame) {
         if (!cfg.correction || !gl) return;
 
+        bool single = onlyPlayer >= 0 && gl->m_levelSettings && !gl->m_levelSettings->m_twoPlayerMode;
         for (uint8_t p = 0; p < 2; ++p) {
-            if (onlyPlayer >= 0 && p != onlyPlayer) continue;
+            if (onlyPlayer >= 0 && !single && p != onlyPlayer) continue;
             PlayerObject* pl = p == 0 ? gl->m_player1 : gl->m_player2;
             if (!pl) continue;
             if (p == 1 && !pl->isVisible()) continue;
@@ -203,6 +222,8 @@ namespace ivey {
             c.player = p;
             c.x = pl->getPositionX();
             c.y = pl->getPositionY();
+            c.yVel = static_cast<float>(pl->m_yVelocity);
+            c.vel = true;
             macro.checks.push_back(c);
         }
     }
@@ -219,9 +240,14 @@ namespace ivey {
             float dx = pl->getPositionX() - c.x;
             float dy = pl->getPositionY() - c.y;
             // Tiny float noise is left alone, real drift is pulled back.
-            if (dx * dx + dy * dy < 0.0025f) continue;
+            bool posOff = dx * dx + dy * dy >= 0.0025f;
+            bool velOff = c.vel && std::abs(static_cast<float>(pl->m_yVelocity) - c.yVel) > 0.25f;
+            if (!posOff && !velOff) continue;
 
-            pl->setPosition({c.x, c.y});
+            // Position and vertical speed go back together, otherwise the player
+            // drifts away again on the very next frames.
+            if (posOff) pl->setPosition({c.x, c.y});
+            if (c.vel) pl->m_yVelocity = static_cast<double>(c.yVel);
             ++fixes;
         }
     }
@@ -665,15 +691,42 @@ namespace ivey {
 
         size_t before = macro.entries.size();
 
-        auto inputs = macro.entries;
-        inputs.insert(inputs.end(), other.entries.begin(), other.entries.end());
-        std::stable_sort(inputs.begin(), inputs.end(), [](Entry const& a, Entry const& b) { return a.frame < b.frame; });
-        inputs.erase(std::unique(inputs.begin(), inputs.end(), [](Entry const& a, Entry const& b) {
-            return a.frame == b.frame && a.input == b.input && a.state == b.state && a.player == b.player;
-        }), inputs.end());
+        // Each player comes from one macro only. Mixing the clicks of the same player from two
+        // macros would give presses and releases that cancel each other out.
+        // A player the loaded macro has clicks for keeps those, otherwise the other macro supplies them.
+        bool mine[2] = {false, false};
+        bool theirs[2] = {false, false};
+        for (auto const& e : macro.entries) if (e.player < 2) mine[e.player] = true;
+        for (auto const& e : other.entries) if (e.player < 2) theirs[e.player] = true;
 
-        auto checks = macro.checks;
-        checks.insert(checks.end(), other.checks.begin(), other.checks.end());
+        bool takeOther[2];
+        size_t added = 0;
+        for (int p = 0; p < 2; ++p) takeOther[p] = !mine[p] && theirs[p];
+
+        if (!takeOther[0] && !takeOther[1]) {
+            status = "Nothing to merge, both macros have the same player";
+            return false;
+        }
+
+        std::vector<Entry> inputs;
+        for (auto const& e : macro.entries) inputs.push_back(e);
+        for (auto const& e : other.entries) {
+            if (e.player < 2 && takeOther[e.player]) {
+                inputs.push_back(e);
+                ++added;
+            }
+        }
+        std::stable_sort(inputs.begin(), inputs.end(), [](Entry const& a, Entry const& b) { return a.frame < b.frame; });
+
+        std::vector<Check> checks;
+        for (auto const& c : macro.checks) {
+            // positions of a player the other macro supplies are dropped, they came from another run
+            if (c.player < 2 && takeOther[c.player]) continue;
+            checks.push_back(c);
+        }
+        for (auto const& c : other.checks) {
+            if (c.player < 2 && takeOther[c.player]) checks.push_back(c);
+        }
         std::stable_sort(checks.begin(), checks.end(), [](Check const& a, Check const& b) {
             return a.frame != b.frame ? a.frame < b.frame : a.player < b.player;
         });
@@ -690,7 +743,7 @@ namespace ivey {
         checkCursor = 0;
         loadedName.clear(); // it is a new macro now, not the file it came from
 
-        status = fmt::format("Merged: {} + {} inputs", before, other.entries.size());
+        status = fmt::format("Merged: {} + {} inputs", before, added);
         return true;
     }
 
