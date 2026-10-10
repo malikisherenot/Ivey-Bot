@@ -356,16 +356,16 @@ namespace {
             this->addChild(m_renderMenu);
             {
                 auto node = CCNode::create();
-                node->setContentSize({60.f, 24.f});
+                node->setContentSize({70.f, 30.f});
                 node->setAnchorPoint({0.5f, 0.5f});
-                node->addChild(CCLayerColor::create({90, 22, 22, 220}, 60.f, 24.f));
+                node->addChild(CCLayerColor::create({90, 22, 22, 220}, 70.f, 30.f));
                 auto l = CCLabelBMFont::create("Stop", ivey::fontName().c_str());
                 ivey::styleText(l, 0.5f);
-                l->setPosition({30.f, 12.f});
+                l->setPosition({35.f, 15.f});
                 node->addChild(l, 1);
                 auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(Overlay::onStep));
                 item->setTag(99);
-                item->setPosition({40.f, 30.f});
+                item->setPosition({45.f, 40.f});
                 m_renderMenu->addChild(item);
             }
             m_renderMenu->setVisible(false);
@@ -664,6 +664,11 @@ class $modify(IveyPlayLayer, PlayLayer) {
         PlayLayer::resetLevel();
         Bot::get().safeMode = false; // every attempt starts clean
         Bot::get().onReset(frameOf(this));
+        if (Bot::get().mode == Mode::Record) {
+            // matches the release the macro just stored for buttons that were held
+            if (m_player1) m_player1->releaseAllButtons();
+            if (m_player2) m_player2->releaseAllButtons();
+        }
 
         auto& render = ivey::Renderer::get();
         if (render.starting()) render.begin(this);
@@ -728,10 +733,15 @@ class $modify(IveySpeed, CCScheduler) {
             on = false;
         }
 
+        // Only the game step and the video capture use the video size.
+        if (rendering) render.enterVideo();
         CCScheduler::update(dt * speed);
         if (on && cfg.speed != 1.f && PlayLayer::get()) bot.safeMode = true;
 
-        if (rendering) render.tick();
+        if (rendering) {
+            render.tick();
+            render.leaveVideo();
+        }
 
         static float lastPitch = 1.f;
         float pitch = (!fast && on && cfg.speedAudio) ? std::clamp(cfg.speed, 0.1f, 4.f) : 1.f;
