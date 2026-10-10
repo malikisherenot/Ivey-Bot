@@ -30,6 +30,7 @@ namespace ivey {
         int  renderFps = 60;
         int  renderBitrate = 30;   // Mbps
         int  renderTail = 2;       // seconds recorded after the level ends
+        bool renderAudio = true;   // the level song is added to the video
         std::string renderCodec;   // empty = pick one automatically
         int  corrInterval = 4;
         int  waveInterval = 1;
@@ -117,10 +118,6 @@ namespace ivey {
         bool tpsLocked() const { return mode != Mode::Idle; }
         void clear();
         void applyMacroSettings();
-        void applyPreset(int index);
-        bool presetActive(int index) const;
-        static int presetCount();
-        static char const* presetName(int index);
         void revertSettings();
 
         // files

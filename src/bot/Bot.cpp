@@ -8,6 +8,16 @@
 using namespace geode::prelude;
 
 namespace ivey {
+    namespace {
+        // Angle in degrees brought to -180 .. 180.
+        float normalizeAngle(float a) {
+            a = std::fmod(a, 360.f);
+            if (a > 180.f) a -= 360.f;
+            if (a < -180.f) a += 360.f;
+            return a;
+        }
+    }
+
 
     void Config::load() {
         auto m = Mod::get();
@@ -32,6 +42,7 @@ namespace ivey {
         renderBitrate = m->getSavedValue<int>("render-bitrate", 30);
         renderTail    = m->getSavedValue<int>("render-tail", 2);
         renderCodec   = m->getSavedValue<std::string>("render-codec", "");
+        renderAudio   = m->getSavedValue<bool>("render-audio", true);
         corrInterval  = m->getSavedValue<int>("corr-interval", 4);
         waveInterval  = m->getSavedValue<int>("wave-interval", 1);
         stepBudget    = m->getSavedValue<int>("step-budget", 33);
@@ -88,6 +99,7 @@ namespace ivey {
         m->setSavedValue("render-bitrate", renderBitrate);
         m->setSavedValue("render-tail", renderTail);
         m->setSavedValue("render-codec", renderCodec);
+        m->setSavedValue("render-audio", renderAudio);
         m->setSavedValue("corr-interval", corrInterval);
         m->setSavedValue("wave-interval", waveInterval);
         m->setSavedValue("step-budget", stepBudget);
@@ -224,6 +236,8 @@ namespace ivey {
             c.y = pl->getPositionY();
             c.yVel = static_cast<float>(pl->m_yVelocity);
             c.vel = true;
+            c.rot = normalizeAngle(pl->getRotation());
+            c.hasRot = true;
             macro.checks.push_back(c);
         }
     }
@@ -242,7 +256,16 @@ namespace ivey {
             // Tiny float noise is left alone, real drift is pulled back.
             bool posOff = dx * dx + dy * dy >= 0.0025f;
             bool velOff = c.vel && std::abs(static_cast<float>(pl->m_yVelocity) - c.yVel) > 0.25f;
+
+            // The rotation is what shows orbs, portals and pads on the player. It is only visual,
+            // so it is put back on its own as soon as it looks wrong.
+            bool rotOff = c.hasRot && std::abs(normalizeAngle(pl->getRotation() - c.rot)) > 1.5f;
+            if (rotOff) {
+                pl->setRotation(c.rot);
+                if (!posOff && !velOff) ++fixes;
+            }
             if (!posOff && !velOff) continue;
+            if (c.hasRot) pl->setRotation(c.rot);
 
             // Position and vertical speed go back together, otherwise the player
             // drifts away again on the very next frames.
@@ -363,63 +386,6 @@ namespace ivey {
         cfg.frameAccurate = backup.frameAccurate;
         cfg.correction = backup.correction;
         backup.active = false;
-    }
-
-    // ---------- presets ----------
-
-    namespace {
-        struct Preset {
-            char const* name;
-            int tps;
-            bool correction;
-            int corrInterval;
-            int waveInterval;
-            int budget;
-            bool seed;
-        };
-
-        const Preset PRESETS[] = {
-            {"Accuracy",    240, true,  2,  1, 66, true},
-            {"Balanced",    240, true,  8,  2, 33, true},
-            {"Performance", 240, true,  32, 8, 8,  true},
-            {"Wave",        480, true,  4,  1, 33, true},
-            {"Lite",        240, false, 8,  2, 8,  true},
-        };
-    }
-
-    int Bot::presetCount() { return static_cast<int>(sizeof(PRESETS) / sizeof(PRESETS[0])); }
-
-    char const* Bot::presetName(int index) {
-        return (index >= 0 && index < presetCount()) ? PRESETS[index].name : "";
-    }
-
-    void Bot::applyPreset(int index) {
-        if (index < 0 || index >= presetCount()) return;
-        auto const& p = PRESETS[index];
-
-        // A loaded macro owns TPS and corrections until it is cleared,
-        // and nothing changes them while the bot is recording or replaying.
-        if (!backup.active && !tpsLocked()) {
-            cfg.tps = p.tps;
-            resetStepping();
-            cfg.frameAccurate = true;
-            cfg.correction = p.correction;
-        }
-        cfg.corrInterval = p.corrInterval;
-        cfg.waveInterval = p.waveInterval;
-        cfg.stepBudget = p.budget;
-        cfg.fixedSeed = p.seed;
-        cfg.save();
-
-        status = fmt::format("Preset: {}", p.name);
-    }
-
-    bool Bot::presetActive(int index) const {
-        if (index < 0 || index >= presetCount()) return false;
-        auto const& p = PRESETS[index];
-        return cfg.corrInterval == p.corrInterval && cfg.waveInterval == p.waveInterval &&
-               cfg.stepBudget == p.budget && cfg.fixedSeed == p.seed &&
-               (backup.active || (cfg.tps == p.tps && cfg.correction == p.correction));
     }
 
     // ---------- files ----------

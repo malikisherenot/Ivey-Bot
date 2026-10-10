@@ -19,7 +19,10 @@ namespace ivey {
     //   v4: same as v3, plus the vertical speed of the player (1/128 units)
     //       first: ... | varint hasSpeed | (if 1) zigzag speed
     //       next:  varint (gap << 2 | hasSpeed << 1 | zero), ..., then (if hasSpeed) zigzag speed change
-    constexpr uint8_t  FORMAT_VERSION = 4;
+    //   v5: same as v4, plus the rotation of the player (1/16 degrees)
+    //       first: ... | varint (hasSpeed | hasRotation << 1) | speed | rotation
+    //       next:  varint (gap << 3 | hasRotation << 2 | hasSpeed << 1 | zero), ..., speed change, rotation change
+    constexpr uint8_t  FORMAT_VERSION = 5;
     constexpr size_t   HEADER_SIZE    = 16;
     constexpr size_t   ENTRY_SIZE     = 7;
     constexpr size_t   CHECK_SIZE     = 17;
@@ -39,6 +42,8 @@ namespace ivey {
         float    y      = 0.f;
         float    yVel   = 0.f;
         bool     vel    = false; // yVel was recorded (checks from other bots have none)
+        float    rot    = 0.f;   // rotation in degrees, -180 to 180
+        bool     hasRot = false; // rot was recorded
     };
 
     struct Macro {

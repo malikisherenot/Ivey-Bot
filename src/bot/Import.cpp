@@ -473,13 +473,28 @@ namespace ivey {
 
         // Frame fixes become position checks.
         if (auto fixes = root.get("frameFixes"); fixes && fixes->t == Mp::Arr) {
-            auto addCheck = [&](uint32_t frame, uint8_t player, double x, double y) {
+            // Only xdBot (not its alpha/beta builds, except v2.0.0) stores the rotation of the player.
+            bool rotationOk = botName == "xdBot" &&
+                              ((botVersion.find("beta.") == std::string::npos && botVersion.find("alpha.") == std::string::npos) ||
+                               botVersion == "v2.0.0");
+
+            auto addCheck = [&](uint32_t frame, uint8_t player, double x, double y, Mp const* rot = nullptr) {
                 if (x == 0.0 && y == 0.0) return;
                 Check c;
                 c.frame = frame;
                 c.player = player;
                 c.x = static_cast<float>(x);
                 c.y = static_cast<float>(y);
+                if (rotationOk && rot && rot->t != Mp::Nil) {
+                    double r = rot->num();
+                    if (r != 0.0) {
+                        r = std::fmod(r, 360.0);
+                        if (r > 180.0) r -= 360.0;
+                        if (r < -180.0) r += 360.0;
+                        c.rot = static_cast<float>(r);
+                        c.hasRot = true;
+                    }
+                }
                 m.checks.push_back(c);
             };
 
@@ -491,11 +506,11 @@ namespace ivey {
                 if (auto p1 = fx.get("p1"); p1 && p1->t == Mp::Map) {
                     auto x = p1->get("x");
                     auto y = p1->get("y");
-                    addCheck(f, 0, x ? x->num() : 0.0, y ? y->num() : 0.0);
+                    addCheck(f, 0, x ? x->num() : 0.0, y ? y->num() : 0.0, p1->get("r"));
                     if (auto p2 = fx.get("p2"); p2 && p2->t == Mp::Map) {
                         auto x2 = p2->get("x");
                         auto y2 = p2->get("y");
-                        addCheck(f, 1, x2 ? x2->num() : 0.0, y2 ? y2->num() : 0.0);
+                        addCheck(f, 1, x2 ? x2->num() : 0.0, y2 ? y2->num() : 0.0, p2->get("r"));
                     }
                 }
                 else if (auto x1 = fx.get("player1X")) {
