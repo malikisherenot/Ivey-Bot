@@ -1,5 +1,16 @@
 # Ivey Bot Changelog
 
+## v1.15.0
+
+- Window Effect (Aurora, Rainbow, Scanlines) in the Theme tab
+
+## v1.14.0
+
+- Prevent Death (pauses before a death, then click and step)
+- Show Hitboxes
+- Hitbox Trail
+- Trajectory tab is now called Assist
+
 ## v1.13.1
 
 - Build fixes (Windows, macOS, iOS, Android)
