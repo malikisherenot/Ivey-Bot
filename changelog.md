@@ -1,5 +1,12 @@
 # Ivey Bot Changelog
 
+## v1.13.0
+
+- Audio in the renderer (the song is added to the video)
+- Recording one player turns on noclip for the other player
+- gdr.json macros keep the player rotation (orbs and portals look right)
+- Presets removed
+
 ## v1.12.0
 
 - Renderer zoom fixed
