@@ -49,6 +49,7 @@ namespace ivey {
         renderAudio   = m->getSavedValue<bool>("render-audio", true);
         corrInterval  = m->getSavedValue<int>("corr-interval", 4);
         waveInterval  = m->getSavedValue<int>("wave-interval", 1);
+        tpsClassic    = m->getSavedValue<bool>("tps-classic", false);
         stepBudget    = m->getSavedValue<int>("step-budget", 33);
         if (stepBudget == 12 || stepBudget == 17) stepBudget = 33; // the old defaults
         tps           = m->getSavedValue<int>("tps", 240);
@@ -113,6 +114,7 @@ namespace ivey {
         m->setSavedValue("render-audio", renderAudio);
         m->setSavedValue("corr-interval", corrInterval);
         m->setSavedValue("wave-interval", waveInterval);
+        m->setSavedValue("tps-classic", tpsClassic);
         m->setSavedValue("step-budget", stepBudget);
         m->setSavedValue("tps", b.active ? b.tps : tps);
         m->setSavedValue("speedhack", speedhack);

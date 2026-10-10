@@ -38,6 +38,7 @@ namespace ivey {
         std::string renderCodec;   // empty = pick one automatically
         int  corrInterval = 4;
         int  waveInterval = 1;
+        bool tpsClassic = false;     // step loop copied from xdBot, for comparing
         int  stepBudget = 33; // ms of stepping allowed per screen frame
         int  tps = 240;
         bool speedhack = false;
@@ -73,6 +74,7 @@ namespace ivey {
 
         Backup backup;
         uint32_t previousFrame = 0;
+        int  preventSkip = 0;        // steps where Prevent Death stays quiet after the stepper was turned off
         bool safeMode = false;
         int stepsPending = 0;
         bool swiftBusy = false;
