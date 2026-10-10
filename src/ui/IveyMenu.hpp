@@ -6,6 +6,8 @@
 
 namespace ivey {
 
+    class ThemeFx;
+
     // Abel when it loaded, chatFont otherwise.
     std::string const& fontName();
     float fontScale();
@@ -87,6 +89,7 @@ namespace ivey {
 
         cocos2d::CCNode* m_root = nullptr;
         cocos2d::extension::CCScale9Sprite* m_bg = nullptr;
+        ThemeFx* m_fx = nullptr;
         cocos2d::CCMenu* m_tabMenu = nullptr;
         cocos2d::CCMenu* m_content = nullptr;
         cocos2d::CCLabelBMFont* m_status = nullptr;

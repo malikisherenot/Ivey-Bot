@@ -1,4 +1,5 @@
 #include "IveyMenu.hpp"
+#include "ThemeFx.hpp"
 #include "../bot/Bot.hpp"
 #include "../render/Renderer.hpp"
 #include <algorithm>
@@ -26,7 +27,7 @@ namespace ivey {
         constexpr int TAB_SEARCH = 9;
         constexpr int TAB_RENDER = 10;
         const char* TAB_NAMES[] = {"Gameplay", "Bot", "Macro", "Physics", "", "Visual",
-                                   "Theme", "Labels", "Trajectory", "Search", "Render"};
+                                   "Theme", "Labels", "Assist", "Search", "Render"};
 
         std::vector<int> tabOrder(bool searchOpen) {
             std::vector<int> order = {0, TAB_TRAJECTORY, TAB_RENDER, 1, TAB_MACRO};
@@ -325,6 +326,11 @@ namespace ivey {
                         cfg.opacity = (cfg.opacity + 1) % OPACITY_COUNT;
                         cfg.save();
                     }, [] { return fmt::format("{}", OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]); });
+                    action("Window Effect", [] {
+                        auto& cfg = Bot::get().cfg;
+                        cfg.fx = (cfg.fx + 1) % ThemeFx::count();
+                        cfg.save();
+                    }, [] { return std::string(ThemeFx::name(Bot::get().cfg.fx)); });
                     break;
                 }
                 case 7: { // Labels
@@ -346,7 +352,21 @@ namespace ivey {
                              });
                     check("Release Line", c.trajectoryRelease);
                     r.push_back(MenuRow{"Green = hold, red = release", nullptr, nullptr, nullptr, nullptr});
-                    r.push_back(MenuRow{"Runs do not count while it is on", nullptr, nullptr, nullptr, nullptr});
+
+                    check("Prevent Death", c.preventDeath, nullptr,
+                          [] { return fmt::format("{}f", Bot::get().cfg.preventFrames); });
+                    editable("Look Ahead (frames)", [] { return std::to_string(Bot::get().cfg.preventFrames); }, 1, 30,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.preventFrames = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Prevent Death looks {} frames ahead", cfg.preventFrames);
+                             });
+                    r.push_back(MenuRow{"Pauses before a death, click then step", nullptr, nullptr, nullptr, nullptr});
+
+                    check("Show Hitboxes", c.hitboxes);
+                    check("Hitbox Trail", c.hitboxTrail);
+                    r.push_back(MenuRow{"Runs do not count while these help you", nullptr, nullptr, nullptr, nullptr});
                     break;
                 }
                 case 10: { // Render
@@ -442,7 +462,7 @@ namespace ivey {
 
             // Arrows are only for rows that step through values or settings.
             for (auto& row : r) {
-                if (row.label == "Accent Color" || row.label == "Window Opacity" || row.label == "Resolution" || row.label == "Codec") row.arrowIcon = true;
+                if (row.label == "Accent Color" || row.label == "Window Opacity" || row.label == "Window Effect" || row.label == "Resolution" || row.label == "Codec") row.arrowIcon = true;
             }
 
             // Thin lines that group related rows.
@@ -641,6 +661,11 @@ namespace ivey {
         m_bg->setColor({20, 20, 20});
         m_root->addChild(m_bg);
 
+        // animated colour layer, shown when a Window Effect is chosen
+        m_fx = ThemeFx::create({W - 6.f, H - 6.f});
+        m_fx->setPosition({3.f, 3.f});
+        m_root->addChild(m_fx);
+
         auto titleBar = CCLayerColor::create({38, 38, 38, 255}, W - 8.f, TITLE_H - 4.f);
         titleBar->setPosition({4.f, H - TITLE_H});
         m_root->addChild(titleBar);
@@ -699,12 +724,13 @@ namespace ivey {
 
     void IveyMenu::applyTheme() {
         m_bg->setOpacity(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]);
+        if (m_fx) m_fx->setEffect(std::clamp(Bot::get().cfg.fx, 0, ThemeFx::count() - 1), accentColor());
     }
 
     std::string IveyMenu::structureKey() const {
         auto& bot = Bot::get();
-        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
-                           m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
+        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
+                           bot.cfg.fx, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
                (Renderer::get().active() ? "|r" : "|-") + (Renderer::get().available() ? "a" : "x");
     }
 
