@@ -22,6 +22,10 @@ namespace ivey {
         bool trajectory = false;
         int  trajectoryLength = 500;
         bool trajectoryRelease = true;
+        bool preventDeath = false;   // pauses before a death
+        int  preventFrames = 3;      // how many steps ahead it looks
+        bool hitboxes = false;
+        bool hitboxTrail = false;
         bool swift = false;
         int  swiftClicks = 2;
         bool swiftSmart = false;
@@ -49,6 +53,7 @@ namespace ivey {
         bool lblAccuracy = true;
         int  accent = 0;
         int  opacity = 1;
+        int  fx = 0;                 // window effect: 0 off, 1 Aurora, 2 Rainbow, 3 Scanlines
 
         void load();
         void save() const;

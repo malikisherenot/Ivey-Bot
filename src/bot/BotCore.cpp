@@ -33,6 +33,10 @@ namespace ivey {
         trajectoryLength = m->getSavedValue<int>("trajectory-length", 500);
         if (trajectoryLength == 100) trajectoryLength = 500; // the old default
         trajectoryRelease = m->getSavedValue<bool>("trajectory-release", true);
+        preventDeath  = m->getSavedValue<bool>("prevent-death", false);
+        preventFrames = m->getSavedValue<int>("prevent-frames", 3);
+        hitboxes      = m->getSavedValue<bool>("hitboxes", false);
+        hitboxTrail   = m->getSavedValue<bool>("hitbox-trail", false);
         swift         = m->getSavedValue<bool>("swift", false);
         swiftClicks   = m->getSavedValue<int>("swift-clicks", 2);
         swiftSmart    = m->getSavedValue<bool>("swift-smart", false);
@@ -61,10 +65,13 @@ namespace ivey {
         lblAccuracy   = m->getSavedValue<bool>("lbl-accuracy", true);
         accent        = m->getSavedValue<int>("accent", 0);
         opacity       = m->getSavedValue<int>("opacity", 1);
+        fx            = m->getSavedValue<int>("window-fx", 0);
+        if (fx < 0 || fx > 3) fx = 0;
         if (tps < 1 || tps > 65535) tps = 240;
         if (corrInterval < 1 || corrInterval > 10000) corrInterval = 4;
         if (waveInterval < 1 || waveInterval > 10000) waveInterval = 1;
         if (trajectoryLength < 2 || trajectoryLength > 2000) trajectoryLength = 500;
+        if (preventFrames < 1 || preventFrames > 30) preventFrames = 3;
         if (swiftClicks < 1 || swiftClicks > 100) swiftClicks = 2;
         if (renderWidth < 16 || renderWidth > 16384) renderWidth = 1920;
         if (renderHeight < 16 || renderHeight > 16384) renderHeight = 1080;
@@ -90,6 +97,10 @@ namespace ivey {
         m->setSavedValue("trajectory", trajectory);
         m->setSavedValue("trajectory-length", trajectoryLength);
         m->setSavedValue("trajectory-release", trajectoryRelease);
+        m->setSavedValue("prevent-death", preventDeath);
+        m->setSavedValue("prevent-frames", preventFrames);
+        m->setSavedValue("hitboxes", hitboxes);
+        m->setSavedValue("hitbox-trail", hitboxTrail);
         m->setSavedValue("swift", swift);
         m->setSavedValue("swift-clicks", swiftClicks);
         m->setSavedValue("swift-smart", swiftSmart);
@@ -117,6 +128,7 @@ namespace ivey {
         m->setSavedValue("lbl-accuracy", lblAccuracy);
         m->setSavedValue("accent", accent);
         m->setSavedValue("opacity", opacity);
+        m->setSavedValue("window-fx", fx);
     }
 
     Bot& Bot::get() {
