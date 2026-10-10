@@ -2,10 +2,15 @@
 #include "../bot/Bot.hpp"
 
 #include <eclipse.ffmpeg-api/include/events.hpp>
+#include <eclipse.ffmpeg-api/include/audio_mixer.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <span>
 
 using namespace geode::prelude;
@@ -29,6 +34,162 @@ namespace ivey {
 
         ffmpeg::events::Recorder* recorderOf(void* p) {
             return static_cast<ffmpeg::events::Recorder*>(p);
+        }
+
+        void put16(std::ofstream& f, uint16_t v) {
+            char b[2] = {static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF)};
+            f.write(b, 2);
+        }
+
+        void put32(std::ofstream& f, uint32_t v) {
+            char b[4] = {static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF),
+                         static_cast<char>((v >> 16) & 0xFF), static_cast<char>((v >> 24) & 0xFF)};
+            f.write(b, 4);
+        }
+
+        // Reads the song with FMOD and writes the part that belongs to the video as a stereo WAV file.
+        // The part starts `offset` seconds into the song and is exactly `duration` seconds long;
+        // a song that is too short is filled up with silence.
+        bool decodeSong(std::string const& file, double offset, double duration, std::filesystem::path const& wav) {
+            auto engine = FMODAudioEngine::sharedEngine();
+            if (!engine || !engine->m_system || file.empty()) return false;
+
+            FMOD::Sound* sound = nullptr;
+            if (engine->m_system->createSound(file.c_str(), FMOD_OPENONLY | FMOD_ACCURATETIME, nullptr, &sound) != FMOD_OK || !sound) {
+                return false;
+            }
+
+            FMOD_SOUND_TYPE type;
+            FMOD_SOUND_FORMAT format;
+            int channels = 0, bits = 0;
+            float freq = 0.f;
+            int priority = 0;
+            sound->getFormat(&type, &format, &channels, &bits);
+            sound->getDefaults(&freq, &priority);
+
+            bool isFloat = format == FMOD_SOUND_FORMAT_PCMFLOAT;
+            bool is16 = format == FMOD_SOUND_FORMAT_PCM16;
+            if ((!isFloat && !is16) || channels < 1 || freq < 8000.f) {
+                sound->release();
+                return false;
+            }
+
+            uint32_t rate = static_cast<uint32_t>(std::lround(freq));
+            size_t sampleBytes = isFloat ? 4 : 2;
+            size_t frameBytes = sampleBytes * static_cast<size_t>(channels);
+            uint64_t totalFrames = static_cast<uint64_t>(std::max(0.0, duration) * rate);
+            if (totalFrames == 0) {
+                sound->release();
+                return false;
+            }
+
+            std::ofstream out(wav, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                sound->release();
+                return false;
+            }
+
+            uint32_t dataBytes = static_cast<uint32_t>(totalFrames * 4); // 16 bit stereo
+            out.write("RIFF", 4);
+            put32(out, 36 + dataBytes);
+            out.write("WAVEfmt ", 8);
+            put32(out, 16);
+            put16(out, 1);              // PCM
+            put16(out, 2);              // stereo
+            put32(out, rate);
+            put32(out, rate * 4);
+            put16(out, 4);
+            put16(out, 16);
+            out.write("data", 4);
+            put32(out, dataBytes);
+
+            auto writeFrame = [&out](float l, float r) {
+                auto conv = [](float v) {
+                    v = std::clamp(v, -1.f, 1.f);
+                    return static_cast<int16_t>(std::lround(v * 32767.f));
+                };
+                put16(out, static_cast<uint16_t>(conv(l)));
+                put16(out, static_cast<uint16_t>(conv(r)));
+            };
+
+            uint64_t written = 0;
+
+            // the song starts later than the video: silence first
+            if (offset < 0.0) {
+                uint64_t silent = std::min<uint64_t>(totalFrames, static_cast<uint64_t>(-offset * rate));
+                for (; written < silent; ++written) writeFrame(0.f, 0.f);
+            }
+            else if (offset > 0.0) {
+                sound->seekData(static_cast<unsigned int>(offset * rate));
+            }
+
+            constexpr size_t CHUNK = 8192;
+            std::vector<uint8_t> raw(CHUNK * frameBytes);
+            while (written < totalFrames) {
+                unsigned int got = 0;
+                auto want = static_cast<unsigned int>(std::min<uint64_t>(CHUNK, totalFrames - written) * frameBytes);
+                FMOD_RESULT res = sound->readData(raw.data(), want, &got);
+                size_t frames = got / frameBytes;
+                if (frames == 0) break; // the song ended (or could not be read)
+
+                for (size_t k = 0; k < frames; ++k) {
+                    float v[2] = {0.f, 0.f};
+                    for (int ch = 0; ch < 2 && ch < channels; ++ch) {
+                        uint8_t const* p = raw.data() + k * frameBytes + static_cast<size_t>(ch) * sampleBytes;
+                        if (isFloat) {
+                            float f;
+                            std::memcpy(&f, p, 4);
+                            v[ch] = f;
+                        }
+                        else {
+                            int16_t i;
+                            std::memcpy(&i, p, 2);
+                            v[ch] = static_cast<float>(i) / 32768.f;
+                        }
+                    }
+                    if (channels == 1) v[1] = v[0];
+                    writeFrame(v[0], v[1]);
+                }
+                written += frames;
+                if (res != FMOD_OK) break;
+            }
+
+            // fill the rest with silence so the audio is as long as the video
+            for (; written < totalFrames; ++written) writeFrame(0.f, 0.f);
+
+            out.close();
+            sound->release();
+            return true;
+        }
+
+        // Adds the song to the finished video. Returns an empty string on success, otherwise why not.
+        std::string addSong(std::filesystem::path const& video, std::string const& song, double offset,
+                            double duration, std::filesystem::path const& tempDir) {
+            std::error_code ec;
+            if (song.empty() || !std::filesystem::exists(song, ec)) return "song file not found";
+
+            auto wav = tempDir / "ivey_song.wav";
+            auto tmp = video;
+            tmp.replace_filename(video.stem().string() + "_audio.mp4");
+
+            std::filesystem::path audioFile = wav;
+            if (!decodeSong(song, offset, duration, wav)) {
+                // FMOD could not read it: the song file itself works when it has no offset
+                if (std::abs(offset) > 0.05) return "could not read the song";
+                audioFile = song;
+            }
+
+            auto res = ffmpeg::AudioMixer::mixVideoAudio(video, audioFile, tmp);
+            std::filesystem::remove(wav, ec);
+            if (res.isErr()) {
+                std::filesystem::remove(tmp, ec);
+                return res.unwrapErr();
+            }
+
+            std::filesystem::remove(video, ec);
+            std::filesystem::rename(tmp, video, ec);
+            if (ec) return "could not replace the video";
+            return "";
         }
     }
 
@@ -161,6 +322,22 @@ namespace ivey {
 
         auto path = makePath();
         m_fileName = path.filename().string();
+        m_videoPath = path;
+
+        // the song is added when the video is done
+        m_audio = cfg.renderAudio;
+        m_songFile.clear();
+        m_songOffset = 0.0;
+        if (m_audio && pl && pl->m_level) {
+            std::string song = pl->m_level->getAudioFileName();
+            if (pl->m_level->m_songID == 0) {
+                song = CCFileUtils::sharedFileUtils()->fullPathForFilename(song.c_str(), false);
+            }
+            m_songFile = song;
+            double offset = pl->m_levelSettings ? pl->m_levelSettings->m_songOffset : 0.f;
+            if (auto engine = FMODAudioEngine::sharedEngine()) offset += engine->m_musicOffset / 1000.0;
+            m_songOffset = offset;
+        }
 
         ffmpeg::RenderSettings settings;
         settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
@@ -214,7 +391,6 @@ namespace ivey {
         m_active = true;
         Bot::get().safeMode = true;
         Bot::get().status = "Rendering " + m_fileName;
-        (void)pl;
     }
 
     // ---------- hidden picture the game is drawn into ----------
@@ -430,14 +606,35 @@ namespace ivey {
 
         auto& bot = Bot::get();
         std::string message;
+        bool addAudio = error.empty() && m_audio && m_frames > 0;
         if (!error.empty()) message = "Render failed: " + error;
         else if (cancelled) message = why.empty() ? "Render stopped" : why;
         else message = "Saved " + m_fileName;
+        if (addAudio) message += ", adding audio...";
 
         if (bot.mode != Mode::Idle) bot.setMode(Mode::Idle);
         bot.status = message; // after setMode, which writes its own message
 
         auto icon = !error.empty() ? NotificationIcon::Error : (cancelled ? NotificationIcon::Warning : NotificationIcon::Success);
         Notification::create(message, icon, 5.f)->show();
+
+        if (addAudio) {
+            // runs on its own thread so the game does not freeze while the song is added
+            double duration = m_fps > 0 ? static_cast<double>(m_frames) / static_cast<double>(m_fps) : 0.0;
+            auto video = m_videoPath;
+            auto song = m_songFile;
+            auto offset = m_songOffset;
+            auto name = m_fileName;
+            auto tempDir = Mod::get()->getSaveDir();
+
+            std::thread([video, song, offset, duration, name, tempDir] {
+                std::string why = addSong(video, song, offset, duration, tempDir);
+                Loader::get()->queueInMainThread([why, name] {
+                    std::string text = why.empty() ? "Audio added to " + name : "Saved " + name + " without audio: " + why;
+                    Bot::get().status = text;
+                    Notification::create(text, why.empty() ? NotificationIcon::Success : NotificationIcon::Warning, 5.f)->show();
+                });
+            }).detach();
+        }
     }
 }

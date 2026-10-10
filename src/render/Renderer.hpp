@@ -17,7 +17,7 @@ namespace ivey {
     // are copied out, and a second thread hands them to the FFmpeg API mod
     // (eclipse.ffmpeg-api) which encodes the video. The game advances exactly one video frame
     // per screen frame, so lag only makes rendering slower and never makes the video choppy.
-    // This first version has no audio.
+    // When the video is finished, the song of the level is added to the same file.
     class Renderer {
     public:
         static Renderer& get();
@@ -78,6 +78,12 @@ namespace ivey {
         unsigned int m_fbo = 0;
         int m_oldFbo = 0;
         cocos2d::CCTexture2D* m_texture = nullptr;
+
+        // the song that is added to the video when it is finished
+        bool m_audio = false;
+        std::string m_songFile;
+        double m_songOffset = 0.0;
+        std::filesystem::path m_videoPath;
 
         // frames waiting to be encoded
         void* m_recorder = nullptr; // ffmpeg::events::Recorder, kept out of this header
