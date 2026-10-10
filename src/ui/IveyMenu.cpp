@@ -25,13 +25,13 @@ namespace ivey {
         constexpr int TAB_TRAJECTORY = 8;
         constexpr int TAB_SEARCH = 9;
         constexpr int TAB_RENDER = 10;
-        const char* TAB_NAMES[] = {"Gameplay", "Bot", "Macro", "Physics", "Presets", "Visual",
+        const char* TAB_NAMES[] = {"Gameplay", "Bot", "Macro", "Physics", "", "Visual",
                                    "Theme", "Labels", "Trajectory", "Search", "Render"};
 
         std::vector<int> tabOrder(bool searchOpen) {
             std::vector<int> order = {0, TAB_TRAJECTORY, TAB_RENDER, 1, TAB_MACRO};
             if (searchOpen) order.push_back(TAB_SEARCH);
-            for (int id : {3, 4, 5, 6, 7}) order.push_back(id);
+            for (int id : {3, 5, 6, 7}) order.push_back(id);
             return order;
         }
 
@@ -309,13 +309,6 @@ namespace ivey {
                              });
                     break;
                 }
-                case 4: { // Presets
-                    for (int k = 0; k < Bot::presetCount(); ++k) {
-                        action(Bot::presetName(k), [k] { Bot::get().applyPreset(k); },
-                               [k] { return Bot::get().presetActive(k) ? std::string("active") : std::string(); });
-                    }
-                    break;
-                }
                 case 5: { // Visual
                     check("Show Overlay", c.showOverlay);
                     check("Menu Button", c.menuButton);
@@ -402,6 +395,8 @@ namespace ivey {
                     action("Bitrate", nullptr, [] { return fmt::format("{} Mbps", Bot::get().cfg.renderBitrate); });
                     editable("Bitrate (Mbps)", [] { return std::to_string(Bot::get().cfg.renderBitrate); }, 1, 500,
                              [](double v) { auto& c = Bot::get().cfg; c.renderBitrate = static_cast<int>(std::lround(v)); c.save(); });
+
+                    check("Render Audio", c.renderAudio);
 
                     action("Seconds After End", nullptr, [] { return std::to_string(Bot::get().cfg.renderTail); });
                     editable("Seconds recorded after the level ends", [] { return std::to_string(Bot::get().cfg.renderTail); }, 0, 60,
