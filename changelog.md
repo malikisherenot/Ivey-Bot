@@ -1,5 +1,9 @@
 # Ivey Bot Changelog
 
+## v1.13.1
+
+- Build fixes (Windows, macOS, iOS, Android)
+
 ## v1.13.0
 
 - Audio in the renderer (the song is added to the video)
