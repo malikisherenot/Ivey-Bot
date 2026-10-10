@@ -1,5 +1,18 @@
 # Ivey Bot Changelog
 
+## v1.16.1
+
+- Classic TPS Loop (xdBot method) to compare with
+- Speed readout in the overlay
+
+## v1.16.0
+
+- Window effects fixed on phones
+- Frame stepper fixed with Prevent Death on
+- Show Hitboxes drawn by the mod, no restart needed
+- Render without a macro
+- about.md updated
+
 ## v1.15.0
 
 - Window Effect (Aurora, Rainbow, Scanlines) in the Theme tab

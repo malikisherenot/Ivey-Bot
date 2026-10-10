@@ -50,7 +50,7 @@ Shows where the player will go if you hold or release. It runs a copy of the pla
 
 ## Rendering
 
-Needs the [FFmpeg API](https://geode-sdk.org/mods/eclipse.ffmpeg-api) mod. Load a macro, open the level, then use **Render > Start Rendering**. Videos are saved in the mod's `renders` folder. The song of the level is added to the video automatically (turn it off with **Render Audio**).
+Needs the [FFmpeg API](https://geode-sdk.org/mods/eclipse.ffmpeg-api) mod. Open the level, then use **Render > Start Rendering**. With a macro loaded the macro is rendered, without one the level is rendered while you play it. Videos are saved in the mod's `renders` folder. The song of the level is added to the video automatically (turn it off with **Render Audio**).
 
 ## Credits
 
