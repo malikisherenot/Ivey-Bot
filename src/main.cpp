@@ -11,6 +11,7 @@
 
 #include "bot/Bot.hpp"
 #include "bot/Trajectory.hpp"
+#include "bot/Assist.hpp"
 #include "render/Renderer.hpp"
 #include "ui/IveyMenu.hpp"
 
@@ -251,6 +252,13 @@ namespace {
 
     bool inPlay(GJBaseGameLayer* gl) {
         return typeinfo_cast<PlayLayer*>(gl) != nullptr;
+    }
+
+    // Prevent Death and the hitbox trail look at every physics step, so the game
+    // is stepped one step at a time for them, even at 240 TPS.
+    bool perStep() {
+        auto& cfg = Bot::get().cfg;
+        return cfg.preventDeath || cfg.hitboxTrail;
     }
 
     // Size of the menu button in points. Change this to resize it.
@@ -514,6 +522,8 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         auto& bot = Bot::get();
 
         if (inPlay(this) && PlayLayer::get()) {
+            ivey::Assist::applyHitboxes(this);
+
             if (bot.cfg.instantRespawn && m_player1->m_isDead) {
                 PlayLayer::get()->resetLevel();
                 return;
@@ -525,6 +535,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                     --bot.stepsPending;
                     bot.safeMode = true;
                     GJBaseGameLayer::update(1.f / activeTps());
+                    ivey::Assist::trailStep(PlayLayer::get());
                 }
                 return;
             }
@@ -533,8 +544,10 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // TPS bypass: this follows xdBot's TPS bypass (Zilko & Camellia).
         // The game layer is stepped in slices of 1 / TPS and leftover time is carried over.
         float tps = activeTps();
-        if (tps == 240.f || !PlayLayer::get()) {
-            return GJBaseGameLayer::update(dt);
+        if ((tps == 240.f && !perStep()) || !PlayLayer::get()) {
+            GJBaseGameLayer::update(dt);
+            if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
+            return;
         }
 
         float newDt = 1.f / tps;
@@ -554,10 +567,23 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         double unit = bot.stepAdvance > 0.0 ? bot.stepAdvance : static_cast<double>(newDt);
         double simulated = 0.0;
 
+        bool paused = false;
         bot.stepping = true;
         for (int i = 0; i < 20000 && simulated + unit * 0.999 <= static_cast<double>(realDt); ++i) {
+            // Prevent Death: stop before a step that would kill the player, like the frame stepper.
+            if (bot.cfg.preventDeath && bot.mode != Mode::Replay && !ivey::Renderer::get().active() &&
+                inPlay(this) && ivey::Assist::wouldDie(PlayLayer::get(), bot.cfg.preventFrames)) {
+                bot.cfg.stepper = true;
+                bot.stepsPending = 0;
+                bot.safeMode = true; // seeing a death coming is an advantage, the run does not count
+                bot.status = "Prevent Death: paused, click and step";
+                paused = true;
+                break;
+            }
+
             double before = m_gameState.m_levelTime;
             GJBaseGameLayer::update(newDt);
+            if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
             double advance = m_gameState.m_levelTime - before;
 
             if (advance > 1e-9) {
@@ -575,6 +601,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
         bot.tpsHonored = bot.stepAdvance <= 0.0 || std::abs(bot.stepAdvance - static_cast<double>(newDt)) < static_cast<double>(newDt) * 0.25;
         bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) - simulated, -0.05, 1.0));
+        if (paused) bot.leftOver = 0.f; // no time is saved up while paused
 
         // The trajectory runs once per screen frame, outside the step budget.
         if (auto pl = PlayLayer::get()) {
@@ -585,7 +612,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
     // Also from xdBot's TPS bypass: the step size follows the chosen TPS.
     float getModifiedDelta(float dt) {
         float tps = activeTps();
-        if (tps == 240.f || !PlayLayer::get()) {
+        if ((tps == 240.f && !perStep()) || !PlayLayer::get()) {
             return GJBaseGameLayer::getModifiedDelta(dt);
         }
 
