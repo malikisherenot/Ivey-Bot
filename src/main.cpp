@@ -680,6 +680,11 @@ class $modify(IveyPlayLayer, PlayLayer) {
         bool skip = bot.cfg.noclip &&
                     ((player == m_player1 && bot.cfg.noclipP1) || (player == m_player2 && bot.cfg.noclipP2));
 
+        // Recording only one player: the other one is not recorded, so it cannot die and ruin the run.
+        if (bot.mode == Mode::Record && bot.onlyPlayer >= 0 && m_levelSettings && m_levelSettings->m_twoPlayerMode) {
+            if ((bot.onlyPlayer == 0 && player == m_player2) || (bot.onlyPlayer == 1 && player == m_player1)) skip = true;
+        }
+
         if (skip) {
             bot.safeMode = true;
             return;
