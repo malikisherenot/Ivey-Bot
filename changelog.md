@@ -1,5 +1,14 @@
 # Ivey Bot Changelog
 
+## v1.12.0
+
+- Renderer zoom fixed
+- Stop button while rendering fixed
+- Macros now save vertical speed for better corrections
+- Respawn no longer drops clicks while recording
+- Single player recording fixed
+- Merge takes each player from one macro
+
 ## v1.11.0
 
 - Renderer (video, no audio yet)
