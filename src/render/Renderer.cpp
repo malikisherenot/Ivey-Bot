@@ -2,7 +2,6 @@
 #include "../bot/Bot.hpp"
 
 #include <eclipse.ffmpeg-api/include/events.hpp>
-#include <eclipse.ffmpeg-api/include/audio_mixer.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -179,7 +178,7 @@ namespace ivey {
                 audioFile = song;
             }
 
-            auto res = ffmpeg::AudioMixer::mixVideoAudio(video, audioFile, tmp);
+            auto res = ffmpeg::events::AudioMixer::mixVideoAudio(video, audioFile, tmp);
             std::filesystem::remove(wav, ec);
             if (res.isErr()) {
                 std::filesystem::remove(tmp, ec);
@@ -410,7 +409,7 @@ namespace ivey {
 
         glGenFramebuffers(1, &m_fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, m_texture->getName(), 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture->getName(), 0);
         m_texture->setAliasTexParameters();
 
         bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
