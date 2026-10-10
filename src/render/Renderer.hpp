@@ -38,6 +38,11 @@ namespace ivey {
         void onRestart();
         void stop(bool cancelled, std::string const& why);
 
+        // The video size is only used while a frame is being made. In between, the screen
+        // and the touch positions stay normal, so the picture is not zoomed and buttons work.
+        void enterVideo() { if (m_active) setResolution(false); }
+        void leaveVideo() { if (m_ogRes.width > 0.f) setResolution(true); }
+
         std::string progress() const;
         std::vector<std::string> codecs() const; // encoders that can be picked
 

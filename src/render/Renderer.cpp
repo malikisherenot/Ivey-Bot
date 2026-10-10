@@ -188,10 +188,8 @@ namespace ivey {
         m_ogRes = CCEGLView::get()->getDesignResolutionSize();
         m_ogScaleX = CCEGLView::get()->m_fScaleX;
         m_ogScaleY = CCEGLView::get()->m_fScaleY;
-        setResolution(false);
 
         if (!createFbo()) {
-            setResolution(true);
             recorder->stop();
             delete recorder;
             m_recorder = nullptr;
