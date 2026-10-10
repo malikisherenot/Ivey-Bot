@@ -233,7 +233,11 @@ namespace ivey {
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
 
-        std::string base = fmt::format("{}_{}_{}x{}_{}fps", clean(name), bot.macro.levelID, m_w, m_h, m_fps);
+        int levelId = bot.macro.levelID;
+        if (levelId == 0) {
+            if (auto pl = PlayLayer::get()) levelId = pl->m_level->m_levelID.value();
+        }
+        std::string base = fmt::format("{}_{}_{}x{}_{}fps", clean(name), levelId, m_w, m_h, m_fps);
         auto path = dir / (base + ".mp4");
         for (int n = 2; std::filesystem::exists(path); ++n) {
             path = dir / fmt::format("{}_{}.mp4", base, n);
@@ -269,17 +273,18 @@ namespace ivey {
             bot.status = "Stop the bot first";
             return false;
         }
-        if (bot.macro.entries.empty()) {
-            bot.status = "Load a macro to render";
-            return false;
-        }
-        if (bot.macro.levelID != 0 && bot.macro.levelID != pl->m_level->m_levelID.value()) {
-            bot.status = "This macro is for another level";
-            return false;
-        }
 
-        bot.setMode(Mode::Replay);
-        if (bot.mode != Mode::Replay) return false;
+        // With a macro loaded the macro plays and is rendered. Without one the level is
+        // rendered while you play it yourself.
+        m_withMacro = !bot.macro.entries.empty();
+        if (m_withMacro) {
+            if (bot.macro.levelID != 0 && bot.macro.levelID != pl->m_level->m_levelID.value()) {
+                bot.status = "This macro is for another level";
+                return false;
+            }
+            bot.setMode(Mode::Replay);
+            if (bot.mode != Mode::Replay) return false;
+        }
 
         m_starting = true;
 
@@ -536,7 +541,10 @@ namespace ivey {
     }
 
     void Renderer::onRestart() {
-        if (m_active) stop(true, "Stopped: the level restarted");
+        if (!m_active) return;
+        // Playing yourself: dying ends the video and keeps it. A macro that restarts is an error.
+        if (m_withMacro) stop(true, "Stopped: the level restarted");
+        else stop(false, "");
     }
 
     // Hands the frames to the FFmpeg API one by one.

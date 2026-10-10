@@ -66,6 +66,7 @@ namespace ivey {
         int m_fps = 60;
         int m_warmup = 0;
         int m_tailFrames = -1;
+        bool m_withMacro = true; // false: the level is rendered while the player plays it
         size_t m_frames = 0;
         std::string m_fileName;
 
