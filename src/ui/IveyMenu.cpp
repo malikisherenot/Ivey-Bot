@@ -151,6 +151,7 @@ namespace ivey {
                         [](bool v) {
                             auto& bot = Bot::get();
                             bot.cfg.stepper = v;
+                            if (!v) bot.preventSkip = bot.cfg.preventFrames + 1;
                             bot.stepsPending = 0;
                             bot.status = v ? "Stepper on, use the step buttons" : "Stepper off";
                         },
@@ -187,6 +188,8 @@ namespace ivey {
                         nullptr, tpsText
                     });
                     editable("TPS", tpsValue, 1, 65535, setTps);
+                    check("Classic TPS Loop", c.tpsClassic, nullptr,
+                          [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
                     check("Position Correction", c.correction, nullptr,
                           [] { return fmt::format("every {}f", Bot::get().cfg.corrInterval); });
                     editable("Check every (frames)", [] { return std::to_string(Bot::get().cfg.corrInterval); }, 1, 10000,

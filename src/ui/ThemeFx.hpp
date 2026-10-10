@@ -19,8 +19,12 @@ namespace ivey {
         void draw() override;
         void update(float dt) override;
         bool build();
+        void makeFallback();
+        void updateFallback();
 
         cocos2d::CCGLProgram* m_prog = nullptr;
+        cocos2d::CCLayerGradient* m_fallback = nullptr; // used when the shader cannot run
+        cocos2d::CCDrawNode* m_lines = nullptr;
         bool m_failed = false;
         int m_effect = 0;
         float m_time = 0.f;
