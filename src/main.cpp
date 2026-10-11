@@ -283,6 +283,46 @@ namespace {
         return cfg.preventDeath || cfg.hitboxTrail;
     }
 
+    // Above 240 TPS the game only takes smaller steps through its step-size function. On a device where
+    // that hook cannot be installed, the same thing is done with the game's time warp value: the step
+    // size is time warp / 240, so warp = 240 / TPS gives steps of exactly 1 / TPS.
+    bool useWarp(float tps) {
+        auto& bot = Bot::get();
+        if (tps <= 240.f) return false;
+        switch (bot.cfg.tpsMethod) {
+            case 1: return false;
+            case 2: return true;
+            default: return bot.hookMissing;
+        }
+    }
+
+    // Sets the time warp for the steps made while it lives, and puts the old value back.
+    struct WarpGuard {
+        GJBaseGameLayer* layer;
+        double saved = 1.0;
+        double set = 1.0;
+        bool on = false;
+
+        WarpGuard(GJBaseGameLayer* gl, bool enable, float tps) : layer(gl) {
+            if (!enable || !gl) return;
+            saved = static_cast<double>(gl->m_gameState.m_timeWarp);
+            gl->m_gameState.m_timeWarp = static_cast<decltype(gl->m_gameState.m_timeWarp)>(saved * (240.0 / static_cast<double>(tps)));
+            set = static_cast<double>(gl->m_gameState.m_timeWarp);
+            on = true;
+        }
+
+        void restore() {
+            if (!on) return;
+            // a time warp trigger that fired during the step has set its own value, which stays
+            if (static_cast<double>(layer->m_gameState.m_timeWarp) == set) {
+                layer->m_gameState.m_timeWarp = static_cast<decltype(layer->m_gameState.m_timeWarp)>(saved);
+            }
+            on = false;
+        }
+
+        ~WarpGuard() { restore(); }
+    };
+
     // Size of the menu button in points. Change this to resize it.
     constexpr float BUTTON_SIZE = 46.f;
 
@@ -505,10 +545,16 @@ namespace {
                 s += "\n";
                 // For finding out why a TPS does not behave: does the hook run, and does every step move the clock?
                 if (activeTps() != 240.f) {
-                    if (bot.hookState.empty()) bot.hookState = inspectDeltaHook();
+                    if (bot.hookState.empty()) {
+                        bot.hookState = inspectDeltaHook();
+                        if (bot.hookState == "not installed") bot.hookMissing = true;
+                    }
                     s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {}\n", m_moves, m_hook,
                                      bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState);
-                    if (m_calls > 100.f && m_hook < 1.f && !cfg.tpsClassic) {
+                    if (activeTps() > 240.f && useWarp(activeTps())) {
+                        s += "No step size hook on this device: using the time warp method\n";
+                    }
+                    else if (m_calls > 100.f && m_hook < 1.f && !cfg.tpsClassic && cfg.tpsMethod != 2) {
                         s += "The step size hook is not running, the physics stays at 240\n";
                     }
                 }
@@ -597,7 +643,10 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 if (bot.stepsPending > 0) {
                     --bot.stepsPending;
                     bot.safeMode = true;
-                    GJBaseGameLayer::update(1.f / activeTps());
+                    {
+                        WarpGuard warp(this, useWarp(activeTps()), activeTps());
+                        GJBaseGameLayer::update(1.f / activeTps());
+                    }
                     ++bot.stepCalls;
                     ivey::Assist::trailStep(PlayLayer::get());
                 }
@@ -627,6 +676,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             std::chrono::duration<double, std::milli> limit(ivey::Renderer::get().active() ? 1.0e7 : 16.666);
             int mult = static_cast<int>(realClassic / newDt);
 
+            WarpGuard classicWarp(this, useWarp(tps), tps);
             bot.stepping = true;
             for (int i = 0; i < mult; ++i) {
                 GJBaseGameLayer::update(newDt);
@@ -638,6 +688,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 }
             }
             bot.stepping = false;
+            classicWarp.restore();
             bot.leftOver += (dt - newDt * mult);
 
             if (auto pl = PlayLayer::get()) {
@@ -675,6 +726,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
         bool paused = false;
         int done = 0;
+        WarpGuard warp(this, useWarp(tps), tps);
         bot.stepping = true;
         for (int i = 0; i < 20000; ++i) {
             double simulatedNow = m_gameState.m_levelTime - levelStart;
@@ -702,6 +754,13 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             if (std::chrono::high_resolution_clock::now() - startTime > budget) break;
         }
         bot.stepping = false;
+        warp.restore();
+
+        // No sign of the step-size hook after a number of steps above 240 TPS: it is not installed here.
+        if (tps > 240.f && !bot.hookSeen && !bot.hookMissing && done > 0) {
+            bot.noHookCalls += done;
+            if (bot.noHookCalls > 120) bot.hookMissing = true;
+        }
 
         double simulated = m_gameState.m_levelTime - levelStart;
         if (done > 0 && simulated > 1e-9) {
@@ -748,6 +807,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         m_extraDelta = total - used;
 
         ++bot.hookCalls;
+        bot.hookSeen = true;
         bot.hookLast = used;
         return used;
     }
