@@ -54,6 +54,7 @@ namespace ivey {
         bool lblAccuracy = true;
         int  accent = 0;
         int  opacity = 1;
+        bool fxTop = true;           // the window effect also faintly covers the buttons
         int  fx = 0;                 // window effect: 0 off, 1 Aurora, 2 Rainbow, 3 Scanlines
 
         void load();
@@ -74,6 +75,8 @@ namespace ivey {
 
         Backup backup;
         uint32_t previousFrame = 0;
+        int  editorOffset = 0;       // editor playtest: frames to add, when it starts from a start position
+        bool editorAlign = false;    // the next editor step finds out where in the macro the player starts
         bool editorWasDead = false;  // editor playtest: for noticing a restart
         double editorLastTime = 0.0;
         int  preventSkip = 0;        // steps where Prevent Death stays quiet after the stepper was turned off
@@ -143,6 +146,7 @@ namespace ivey {
         // continue a loaded macro: replays it quickly, then records from its last input
         bool startContinue();
         void finishContinue(GJBaseGameLayer* gl);
+        uint32_t frameAtPosition(float x, float y, float* distance) const; // frame of the macro where P1 was nearest to this point
         uint32_t lastInputFrame() const;
 
         // merge another macro (for example the P2 one) into the loaded macro

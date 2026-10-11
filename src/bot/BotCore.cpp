@@ -67,7 +67,8 @@ namespace ivey {
         accent        = m->getSavedValue<int>("accent", 0);
         opacity       = m->getSavedValue<int>("opacity", 1);
         fx            = m->getSavedValue<int>("window-fx", 0);
-        if (fx < 0 || fx > 3) fx = 0;
+        if (fx < 0 || fx > 6) fx = 0;
+        fxTop         = m->getSavedValue<bool>("window-fx-top", true);
         if (tps < 1 || tps > 65535) tps = 240;
         if (corrInterval < 1 || corrInterval > 10000) corrInterval = 4;
         if (waveInterval < 1 || waveInterval > 10000) waveInterval = 1;
@@ -131,6 +132,7 @@ namespace ivey {
         m->setSavedValue("accent", accent);
         m->setSavedValue("opacity", opacity);
         m->setSavedValue("window-fx", fx);
+        m->setSavedValue("window-fx-top", fxTop);
     }
 
     Bot& Bot::get() {
@@ -530,6 +532,41 @@ namespace ivey {
         }
         status = "Macro not found";
         return false;
+    }
+
+    // Where in the macro the first player was closest to this point (a start position in the editor).
+    // distance gets how far away that was, or -1 if the macro has no positions to compare with.
+    uint32_t Bot::frameAtPosition(float x, float y, float* distance) const {
+        if (distance) *distance = -1.f;
+
+        bool found = false;
+        uint32_t best = 1;
+        float bestDist = 0.f;
+
+        // Before the first position of the macro: this is the start of the level.
+        for (auto const& c : macro.checks) {
+            if (c.player != 0) continue;
+            if (x <= c.x + 1.f) {
+                if (distance) *distance = 0.f;
+                return 1u;
+            }
+            break;
+        }
+
+        for (auto const& c : macro.checks) {
+            if (c.player != 0) continue;
+            float dx = c.x - x, dy = c.y - y;
+            // sideways distance counts most, the height only decides between equal ones
+            float d = std::abs(dx) + std::abs(dy) * 0.01f;
+            if (!found || d < bestDist) {
+                found = true;
+                best = c.frame;
+                bestDist = d;
+            }
+        }
+
+        if (found && distance) *distance = bestDist;
+        return found ? best : 1u;
     }
 
     uint32_t Bot::lastInputFrame() const {
