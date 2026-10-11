@@ -1,5 +1,9 @@
 # Ivey Bot Changelog
 
+## v1.17.3
+
+- Overlay shows if the step size hook is on, and turns it on if it was off
+
 ## v1.17.2
 
 - Overlay shows Moves/s, Hook/s and Hook step when TPS is not 240
