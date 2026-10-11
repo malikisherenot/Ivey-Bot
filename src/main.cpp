@@ -6,6 +6,8 @@
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
+#include <Geode/modify/EditorUI.hpp>
+#include <Geode/modify/EditorPauseLayer.hpp>
 #include <Geode/modify/CCScheduler.hpp>
 #include <Geode/modify/GJGameLevel.hpp>
 
@@ -191,17 +193,34 @@ namespace {
         return static_cast<float>(bot.cfg.tps);
     }
 
+    // A playtest in the level editor that is replaying a macro.
+    bool editorReplay(GJBaseGameLayer* gl) {
+        if (Bot::get().mode != Mode::Replay || PlayLayer::get()) return false;
+        auto editor = typeinfo_cast<LevelEditorLayer*>(gl);
+        return editor && editor->m_playbackMode == PlaybackMode::Playing;
+    }
+
     // Frame = time in the level * TPS. The game's own step counter stays at
     // 240 per second, so it can't be used once TPS changes.
     uint32_t frameOf(GJBaseGameLayer* gl) {
-        // Macros from other bots count the game's own steps (same as xdBot does).
         auto& bot = Bot::get();
+        bool editor = !typeinfo_cast<PlayLayer*>(gl) && typeinfo_cast<LevelEditorLayer*>(gl);
+
+        // Macros from other bots count the game's own steps (same as xdBot does).
+        // The editor counts them twice as fast.
         if (bot.mode == Mode::Replay && (bot.macro.flags & 4)) {
             int steps = gl->m_gameState.m_currentProgress;
+            if (editor) steps /= 2;
             return steps < 0 ? 0u : static_cast<uint32_t>(steps);
         }
 
-        int frame = static_cast<int>(gl->m_gameState.m_levelTime * static_cast<double>(activeTps())) + 1;
+        double time = gl->m_gameState.m_levelTime;
+        // If the editor does not move the level time, the step counter is used instead.
+        if (editor && time <= 0.0 && gl->m_gameState.m_currentProgress >= 2) {
+            time = static_cast<double>(gl->m_gameState.m_currentProgress / 2) / 240.0;
+        }
+
+        int frame = static_cast<int>(time * static_cast<double>(activeTps())) + 1;
         return frame < 0 ? 0u : static_cast<uint32_t>(frame);
     }
 
@@ -310,6 +329,8 @@ namespace {
         int m_lastProgress = 0;
         std::chrono::steady_clock::time_point m_lastTime = std::chrono::steady_clock::now();
         float m_running = 0.f;
+        double m_lastLevel = 0.0;   // level time at the last check, for the Speed readout
+        float m_speed = 100.f;      // game seconds per real second, in percent
         CCMenu* m_renderMenu = nullptr;
 
     public:
@@ -397,6 +418,7 @@ namespace {
             }
             if (n == 0) {
                 bot.cfg.stepper = false;
+                bot.preventSkip = bot.cfg.preventFrames + 1;
                 bot.stepsPending = 0;
                 bot.status = "Stepper off";
             }
@@ -425,6 +447,9 @@ namespace {
                 if (secs >= 0.5) {
                     int progress = pl->m_gameState.m_currentProgress;
                     m_running = progress >= m_lastProgress ? static_cast<float>((progress - m_lastProgress) / secs) : 0.f;
+                    double level = pl->m_gameState.m_levelTime;
+                    m_speed = level >= m_lastLevel ? static_cast<float>((level - m_lastLevel) / secs * 100.0) : 0.f;
+                    m_lastLevel = level;
                     m_lastProgress = progress;
                     m_lastTime = now;
                 }
@@ -447,7 +472,7 @@ namespace {
                 // Running below the TPS means the device can't keep up (see Step Budget).
                 auto& traj = ivey::Trajectory::get();
                 std::string stepText = traj.deltaSeen && traj.delta > 0.f ? fmt::format("{:.0f}", 60.f / traj.delta) : std::string("?");
-                s += fmt::format("Accuracy: {} TPS  Step: {}  Running: {:.0f}", cfg.frameAccurate ? cfg.tps : 0, stepText, m_running);
+                s += fmt::format("Accuracy: {} TPS  Step: {}  Running: {:.0f}  Speed: {:.0f}%", cfg.frameAccurate ? cfg.tps : 0, stepText, m_running, m_speed);
                 float tpsNow = activeTps();
                 if (tpsNow != 240.f && !bot.tpsHonored) s += "  (game ignores TPS)";
                 else if (tpsNow != 240.f && !cfg.stepper && m_running > 1.f && m_running < tpsNow * 0.9f) s += "  (slow)";
@@ -471,6 +496,12 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
     void handleButton(bool down, int button, bool isPlayer1) {
         auto& bot = Bot::get();
         bool play = inPlay(this);
+
+        // Editor playtest: only a replay is supported, the macro is in charge.
+        if (!play && editorReplay(this)) {
+            if (!bot.injecting && bot.cfg.ignoreInputs) return;
+            return GJBaseGameLayer::handleButton(down, button, isPlayer1);
+        }
 
         if (!play) {
             return GJBaseGameLayer::handleButton(down, button, isPlayer1);
@@ -522,8 +553,6 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         auto& bot = Bot::get();
 
         if (inPlay(this) && PlayLayer::get()) {
-            ivey::Assist::applyHitboxes(this);
-
             if (bot.cfg.instantRespawn && m_player1->m_isDead) {
                 PlayLayer::get()->resetLevel();
                 return;
@@ -544,13 +573,42 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // TPS bypass: this follows xdBot's TPS bypass (Zilko & Camellia).
         // The game layer is stepped in slices of 1 / TPS and leftover time is carried over.
         float tps = activeTps();
-        if ((tps == 240.f && !perStep()) || !PlayLayer::get()) {
+        bool editorStepping = editorReplay(this);
+        if ((tps == 240.f && !perStep()) || !(PlayLayer::get() || editorStepping)) {
             GJBaseGameLayer::update(dt);
             if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
             return;
         }
 
         float newDt = 1.f / tps;
+
+        // Classic loop: the same method as the xdBot TPS bypass, step for step. It is here to compare
+        // with the measured loop below when the TPS does not behave.
+        if (bot.cfg.tpsClassic && !perStep()) {
+            float realClassic = dt + bot.leftOver;
+            if (realClassic > dt && newDt < dt) realClassic = dt;
+
+            auto begin = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::milli> limit(ivey::Renderer::get().active() ? 1.0e7 : 16.666);
+            int mult = static_cast<int>(realClassic / newDt);
+
+            bot.stepping = true;
+            for (int i = 0; i < mult; ++i) {
+                GJBaseGameLayer::update(newDt);
+                if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
+                if (std::chrono::high_resolution_clock::now() - begin > limit) {
+                    mult = i + 1;
+                    break;
+                }
+            }
+            bot.stepping = false;
+            bot.leftOver += (dt - newDt * mult);
+
+            if (auto pl = PlayLayer::get()) {
+                if (!ivey::Trajectory::get().creating()) ivey::Trajectory::get().update(pl);
+            }
+            return;
+        }
 
         // Until the game reports its own step size, use the one that is being fed to it.
         if (!ivey::Trajectory::get().deltaSeen) ivey::Trajectory::get().delta = 60.f * newDt;
@@ -571,7 +629,8 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         bot.stepping = true;
         for (int i = 0; i < 20000 && simulated + unit * 0.999 <= static_cast<double>(realDt); ++i) {
             // Prevent Death: stop before a step that would kill the player, like the frame stepper.
-            if (bot.cfg.preventDeath && bot.mode != Mode::Replay && !ivey::Renderer::get().active() &&
+            if (bot.preventSkip > 0) --bot.preventSkip; // just left the stepper, let the player act
+            else if (bot.cfg.preventDeath && bot.mode != Mode::Replay && !ivey::Renderer::get().active() &&
                 inPlay(this) && ivey::Assist::wouldDie(PlayLayer::get(), bot.cfg.preventFrames)) {
                 bot.cfg.stepper = true;
                 bot.stepsPending = 0;
@@ -612,7 +671,8 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
     // Also from xdBot's TPS bypass: the step size follows the chosen TPS.
     float getModifiedDelta(float dt) {
         float tps = activeTps();
-        if ((tps == 240.f && !perStep()) || !PlayLayer::get()) {
+        // At 240 TPS the game's own timing is exact, also when stepping one step at a time.
+        if (tps == 240.f || !(PlayLayer::get() || editorReplay(this))) {
             return GJBaseGameLayer::getModifiedDelta(dt);
         }
 
@@ -638,6 +698,40 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         auto& bot = Bot::get();
+
+        if (editorReplay(this)) {
+            // The editor restarts after a death without telling anyone, so a restart is detected here:
+            // the level time went back, or the player came back to life.
+            double now = m_gameState.m_levelTime;
+            bool dead = m_player1 && m_player1->m_isDead;
+            if ((bot.editorWasDead && !dead) || now + 1e-9 < bot.editorLastTime) {
+                m_gameState.m_levelTime = 0.0;
+                m_gameState.m_currentProgress = 0;
+                bot.resetStepping();
+                bot.onReset(frameOf(this));
+                now = 0.0;
+            }
+            bot.editorWasDead = dead;
+            bot.editorLastTime = now;
+
+            uint32_t before = frameOf(this);
+            if (before == bot.previousFrame && before != 0) {
+                return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+            }
+
+            GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+
+            uint32_t frame = frameOf(this);
+            bot.previousFrame = frame;
+
+            if (m_player1 && m_player1->m_isDead) {
+                m_player1->releaseAllButtons();
+                if (m_player2) m_player2->releaseAllButtons();
+                return;
+            }
+            bot.feed(this, frame);
+            return;
+        }
 
         if (!inPlay(this) || bot.mode == Mode::Idle) {
             return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
@@ -802,6 +896,51 @@ class $modify(IveyPause, PauseLayer) {
         btn->setPosition({BUTTON_SIZE / 2.f + 12.f, BUTTON_SIZE / 2.f + 12.f});
         menu->addChild(btn);
         this->addChild(menu);
+    }
+
+    void onIvey(CCObject*) {
+        ivey::IveyMenu::toggle();
+    }
+};
+
+// Level editor: a playtest replays the loaded macro, and the menu button is in its pause menu.
+class $modify(IveyEditorUI, EditorUI) {
+    void onPlaytest(CCObject* sender) {
+        auto& bot = Bot::get();
+        bool starting = m_editorLayer && m_editorLayer->m_playbackMode == PlaybackMode::Not;
+
+        EditorUI::onPlaytest(sender);
+
+        if (starting && m_editorLayer && bot.mode == Mode::Replay &&
+            m_editorLayer->m_playbackMode == PlaybackMode::Playing) {
+            // A clean clock, so the frames are the same as the ones in the macro.
+            m_editorLayer->m_gameState.m_levelTime = 0.0;
+            m_editorLayer->m_gameState.m_currentProgress = 0;
+            bot.onEnter(m_editorLayer);
+            bot.onReset(0);
+            bot.resetStepping();
+            bot.fixes = 0;
+            bot.editorWasDead = false;
+            bot.editorLastTime = 0.0;
+            bot.status = "Replaying in the editor";
+        }
+    }
+};
+
+class $modify(IveyEditorPause, EditorPauseLayer) {
+    bool init(LevelEditorLayer* editor) {
+        if (!EditorPauseLayer::init(editor)) return false;
+        if (!Bot::get().cfg.menuButton) return true;
+
+        auto btn = makeButton(this, menu_selector(IveyEditorPause::onIvey));
+        if (!btn) return true;
+
+        auto menu = CCMenu::create();
+        menu->setPosition({0.f, 0.f});
+        btn->setPosition({BUTTON_SIZE / 2.f + 12.f, BUTTON_SIZE / 2.f + 12.f});
+        menu->addChild(btn);
+        this->addChild(menu, 100);
+        return true;
     }
 
     void onIvey(CCObject*) {
