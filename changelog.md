@@ -1,5 +1,12 @@
 # Ivey Bot Changelog
 
+## v1.18.0
+
+- Editor playtest can start from a start position
+- Window effect also covers the buttons (faint), can be turned off
+- New window effects: Frost, Pastel, Snow
+- Rainbow accent color that moves
+
 ## v1.17.3
 
 - Overlay shows if the step size hook is on, and turns it on if it was off

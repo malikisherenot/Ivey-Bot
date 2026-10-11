@@ -3,7 +3,7 @@
 Frame-accurate macro bot.
 
 - Record and replay
-- Replay in the editor
+- Replay in the editor, also from start positions
 - Position correction
 - Own `.ivey` format
 - Import `.gdr`, `.gdr2`, `.gdr.json`
@@ -15,4 +15,4 @@ Frame-accurate macro bot.
 - Show hitboxes and hitbox trail
 - Show trajectory
 - Video renderer with audio
-- Window effects
+- Window effects and a rainbow accent

@@ -74,4 +74,4 @@ MIT, see [LICENSE](LICENSE).
 
 ## Editor
 
-Load a macro, press **Replay**, then start a playtest in the editor. The menu button is in the editor pause menu. Recording is not available in the editor.
+Load a macro, press **Replay**, then start a playtest in the editor. The menu button is in the editor pause menu. Recording is not available in the editor. A playtest from a start position starts the macro at the frame where the player was at that spot (the macro needs position checks for that).
