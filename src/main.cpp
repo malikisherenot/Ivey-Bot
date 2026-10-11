@@ -333,6 +333,8 @@ namespace {
         double m_lastLevel = 0.0;   // level time at the last check, for the Speed readout
         unsigned long long m_lastCalls = 0;
         float m_calls = 0.f;        // physics steps really made per second
+        unsigned long long m_lastMoves = 0, m_lastHook = 0;
+        float m_moves = 0.f, m_hook = 0.f; // steps that moved the clock, and runs of the step-size hook, per second
         float m_speed = 100.f;      // game seconds per real second, in percent
         CCMenu* m_renderMenu = nullptr;
 
@@ -455,6 +457,10 @@ namespace {
                     m_lastLevel = level;
                     m_calls = bot.stepCalls >= m_lastCalls ? static_cast<float>((bot.stepCalls - m_lastCalls) / secs) : 0.f;
                     m_lastCalls = bot.stepCalls;
+                    m_moves = bot.stepMoves >= m_lastMoves ? static_cast<float>((bot.stepMoves - m_lastMoves) / secs) : 0.f;
+                    m_lastMoves = bot.stepMoves;
+                    m_hook = bot.hookCalls >= m_lastHook ? static_cast<float>((bot.hookCalls - m_lastHook) / secs) : 0.f;
+                    m_lastHook = bot.hookCalls;
                     m_lastProgress = progress;
                     m_lastTime = now;
                 }
@@ -484,6 +490,11 @@ namespace {
                 else if (tpsNow != 240.f && !cfg.stepper && m_calls > 1.f && m_calls < tpsNow * 0.9f) s += "  (slow)";
                 if (bot.mode == Mode::Replay && cfg.correction) s += fmt::format("  Fixes: {}", bot.fixes);
                 s += "\n";
+                // For finding out why a TPS does not behave: does the hook run, and does every step move the clock?
+                if (activeTps() != 240.f) {
+                    s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}\n", m_moves, m_hook,
+                                     bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0);
+                }
             }
             if (cfg.autoSafe && bot.safeMode) s += "Safe Mode\n";
             if (cfg.stepper) s += fmt::format("Stepper: {} queued\n", bot.stepsPending);
@@ -662,9 +673,11 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 break;
             }
 
+            double beforeCall = m_gameState.m_levelTime;
             GJBaseGameLayer::update(newDt);
             ++done;
             ++bot.stepCalls;
+            if (m_gameState.m_levelTime - beforeCall > 1e-9) ++bot.stepMoves;
             callsTime += static_cast<double>(newDt);
             if (bot.preventSkip > 0) --bot.preventSkip; // just left the stepper, let the player act
             if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
@@ -693,6 +706,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
     // Also from xdBot's TPS bypass: the step size follows the chosen TPS.
     float getModifiedDelta(float dt) {
+        auto& bot = Bot::get();
         float tps = activeTps();
         // At 240 TPS the game's own timing is exact, also when stepping one step at a time.
         if (tps == 240.f || !(PlayLayer::get() || editorReplay(this))) {
@@ -716,6 +730,8 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         double used = steps * warp * newDt;
         m_extraDelta = total - used;
 
+        ++bot.hookCalls;
+        bot.hookLast = used;
         return used;
     }
 
