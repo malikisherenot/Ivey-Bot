@@ -41,6 +41,7 @@ namespace ivey {
         cocos2d::CCNode* mark = nullptr;          // the check mark
         cocos2d::CCLabelBMFont* detail = nullptr; // the value on the right
         bool on = false;
+        bool lit = false;                         // detail text shown in the accent colour
         std::string detailText;
     };
 
@@ -66,6 +67,7 @@ namespace ivey {
         void rebuild();
         void applyTheme();
         void sync(float dt);
+        void update(float dt) override;
         void flush(float dt);
         void queue(bool force);
         void refreshRows();
@@ -89,7 +91,10 @@ namespace ivey {
 
         cocos2d::CCNode* m_root = nullptr;
         cocos2d::extension::CCScale9Sprite* m_bg = nullptr;
-        ThemeFx* m_fx = nullptr;
+        ThemeFx* m_fx = nullptr;     // behind the buttons
+        ThemeFx* m_fxTop = nullptr;  // over the buttons, much fainter
+        cocos2d::CCLayerColor* m_tabLine = nullptr; // underline of the open tab, for the moving accent
+        float m_rainbowClock = 0.f;
         cocos2d::CCMenu* m_tabMenu = nullptr;
         cocos2d::CCMenu* m_content = nullptr;
         cocos2d::CCLabelBMFont* m_status = nullptr;

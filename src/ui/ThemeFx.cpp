@@ -21,13 +21,18 @@ void main() {
 
         const char* FRAG = R"(
 #ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 #endif
 varying vec2 v_uv;
 uniform float u_time;
 uniform vec2 u_size;
 uniform float u_mode;
 uniform vec3 u_accent;
+uniform float u_alpha;
 
 void main() {
     vec2 uv = v_uv;
@@ -57,7 +62,7 @@ void main() {
                    s * abs(sin(uv.x * 2.0 + u_time + 0.8)));
         a = 0.30;
     }
-    else {
+    else if (u_mode < 3.5) {
         // Scanlines in the accent colour with a soft flicker and darker corners
         float line = sin(uv.y * u_size.y * 1.6) * 0.5 + 0.5;
         float flick = 0.96 + 0.04 * sin(u_time * 30.0);
@@ -65,8 +70,50 @@ void main() {
         col = u_accent * (0.30 + 0.35 * line) * flick;
         a = (0.10 + 0.24 * line) * (0.55 + 0.45 * vig);
     }
+    else if (u_mode < 4.5) {
+        // Frost: pale glass with a slow shimmer and a few glints
+        float shimmer = sin(uv.x * 6.0 + uv.y * 3.0 + u_time * 0.6) * 0.5 + 0.5;
+        float glint = max(0.0, sin(uv.x * 40.0 + u_time * 0.8) * sin(uv.y * 28.0 - u_time * 0.5));
+        glint = glint * glint * glint * glint;
+        col = mix(vec3(0.72, 0.86, 1.0), vec3(1.0), shimmer * 0.5) + vec3(glint * 0.6);
+        a = 0.10 + 0.10 * uv.y + glint * 0.18;
+    }
+    else if (u_mode < 5.5) {
+        // Pastel: soft blue, pink and white bands drifting across
+        float b = fract(uv.y * 1.2 + uv.x * 0.25 + u_time * 0.12 + 0.06 * sin(uv.x * 5.0 + u_time));
+        vec3 blue = vec3(0.36, 0.81, 0.98);
+        vec3 pink = vec3(0.96, 0.66, 0.72);
+        vec3 white = vec3(1.0);
+        float k = b * 5.0;
+        float s = smoothstep(0.35, 0.65, fract(k));
+        if (k < 1.0) col = mix(blue, pink, s);
+        else if (k < 2.0) col = mix(pink, white, s);
+        else if (k < 3.0) col = mix(white, pink, s);
+        else if (k < 4.0) col = mix(pink, blue, s);
+        else col = mix(blue, blue, s);
+        a = 0.30;
+    }
+    else {
+        // Snow: flakes falling over a cold blue tint
+        float snow = 0.0;
+        float ratio = u_size.x / u_size.y;
+        for (int i = 0; i < 36; i++) {
+            float j = float(i);
+            float h1 = fract(sin(j * 12.9898) * 43758.5453);
+            float h2 = fract(sin(j * 78.233 + 1.7) * 12543.131);
+            float speed = 0.08 + 0.12 * h2;
+            float x = fract(h1 + 0.04 * sin(u_time * 0.7 + j));
+            float y = 1.0 - fract(h2 * 3.0 + u_time * speed);
+            vec2 d = (uv - vec2(x, y)) * vec2(ratio, 1.0);
+            float r = 0.008 + 0.012 * h2;
+            snow += 1.0 - smoothstep(0.0, r, length(d));
+        }
+        snow = clamp(snow, 0.0, 1.0);
+        col = mix(vec3(0.15, 0.25, 0.6), vec3(1.0), snow);
+        a = 0.16 + 0.55 * snow;
+    }
 
-    gl_FragColor = vec4(col, a);
+    gl_FragColor = vec4(col, a * u_alpha);
 }
 )";
     }
@@ -93,15 +140,26 @@ void main() {
         if (m_prog) m_prog->release();
     }
 
-    int ThemeFx::count() { return 4; }
+    int ThemeFx::count() { return 7; }
 
     char const* ThemeFx::name(int effect) {
         switch (effect) {
             case 1: return "Aurora";
             case 2: return "Rainbow";
             case 3: return "Scanlines";
+            case 4: return "Frost";
+            case 5: return "Pastel";
+            case 6: return "Snow";
             default: return "Off";
         }
+    }
+
+    void ThemeFx::setAlphaScale(float scale) {
+        m_alphaScale = scale;
+    }
+
+    void ThemeFx::setAccent(ccColor3B accent) {
+        m_accent = accent;
     }
 
     void ThemeFx::setEffect(int effect, ccColor3B accent) {
@@ -109,7 +167,7 @@ void main() {
         m_accent = accent;
         this->setVisible(effect > 0);
         if (m_fallback) m_fallback->setVisible(effect > 0 && m_failed);
-        if (m_lines) m_lines->setVisible(effect == 3 && m_failed);
+        if (m_lines) m_lines->setVisible(effect == 3 && m_failed && m_alphaScale >= 0.99f);
         if (effect > 0 && !m_prog && !m_failed) build(); // tries the shader now, so a failure shows at once
         if (m_failed) updateFallback();
     }
@@ -134,25 +192,45 @@ void main() {
         if (!m_fallback) return;
         auto wave = [this](float speed, float shift) { return std::sin(m_time * speed + shift) * 0.5f + 0.5f; };
         auto byte = [](float v) { return static_cast<GLubyte>(std::clamp(v, 0.f, 1.f) * 255.f); };
+        auto op = [this](float v) { return static_cast<GLubyte>(std::clamp(v * m_alphaScale, 0.f, 255.f)); };
 
         if (m_effect == 1) { // Aurora
             float t = wave(0.5f, 0.f);
             m_fallback->setStartColor({byte(0.2f + 0.2f * t), byte(0.7f - 0.2f * t), byte(0.5f)});
             m_fallback->setEndColor({byte(0.9f - 0.2f * t), byte(0.2f), byte(0.5f + 0.2f * t)});
-            m_fallback->setStartOpacity(95);
-            m_fallback->setEndOpacity(95);
+            m_fallback->setStartOpacity(op(95));
+            m_fallback->setEndOpacity(op(95));
         }
         else if (m_effect == 2) { // Rainbow
             m_fallback->setStartColor({byte(wave(1.f, 0.f)), byte(wave(1.f, 2.f)), byte(wave(1.f, 4.f))});
             m_fallback->setEndColor({byte(wave(1.f, 3.f)), byte(wave(1.f, 5.f)), byte(wave(1.f, 1.f))});
-            m_fallback->setStartOpacity(85);
-            m_fallback->setEndOpacity(85);
+            m_fallback->setStartOpacity(op(85));
+            m_fallback->setEndOpacity(op(85));
+        }
+        else if (m_effect == 4) { // Frost
+            m_fallback->setStartColor({200, 225, 255});
+            m_fallback->setEndColor({255, 255, 255});
+            m_fallback->setStartOpacity(op(60));
+            m_fallback->setEndOpacity(op(40));
+        }
+        else if (m_effect == 5) { // Pastel
+            float t = wave(0.6f, 0.f);
+            m_fallback->setStartColor({byte(0.36f + 0.6f * t), byte(0.81f - 0.15f * t), byte(0.98f - 0.26f * t)});
+            m_fallback->setEndColor({byte(0.96f - 0.6f * t), byte(0.66f + 0.15f * t), byte(0.72f + 0.26f * t)});
+            m_fallback->setStartOpacity(op(80));
+            m_fallback->setEndOpacity(op(80));
+        }
+        else if (m_effect == 6) { // Snow
+            m_fallback->setStartColor({40, 64, 150});
+            m_fallback->setEndColor({120, 150, 230});
+            m_fallback->setStartOpacity(op(60));
+            m_fallback->setEndOpacity(op(60));
         }
         else { // Scanlines
             m_fallback->setStartColor(m_accent);
             m_fallback->setEndColor(m_accent);
-            m_fallback->setStartOpacity(55);
-            m_fallback->setEndOpacity(30);
+            m_fallback->setStartOpacity(op(55));
+            m_fallback->setEndOpacity(op(30));
         }
     }
 
@@ -181,6 +259,7 @@ void main() {
         m_locSize = m_prog->getUniformLocationForName("u_size");
         m_locMode = m_prog->getUniformLocationForName("u_mode");
         m_locAccent = m_prog->getUniformLocationForName("u_accent");
+        m_locAlpha = m_prog->getUniformLocationForName("u_alpha");
         return true;
     }
 
@@ -206,6 +285,7 @@ void main() {
         glUniform2f(m_locSize, w, h);
         glUniform1f(m_locMode, static_cast<float>(m_effect));
         glUniform3f(m_locAccent, m_accent.r / 255.f, m_accent.g / 255.f, m_accent.b / 255.f);
+        glUniform1f(m_locAlpha, m_alphaScale);
 
         glVertexAttribPointer(kCCVertexAttrib_Position, 2, GL_FLOAT, GL_FALSE, 0, verts);
         glVertexAttribPointer(kCCVertexAttrib_TexCoords, 2, GL_FLOAT, GL_FALSE, 0, uvs);

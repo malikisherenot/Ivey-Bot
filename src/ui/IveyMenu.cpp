@@ -36,11 +36,24 @@ namespace ivey {
             return order;
         }
 
-        constexpr int ACCENT_COUNT = 5;
-        const char* ACCENT_NAMES[ACCENT_COUNT] = {"Blue", "Green", "Pink", "Purple", "Orange"};
+        constexpr int ACCENT_COUNT = 6;
+        constexpr int ACCENT_RAINBOW = 5; // the colour moves through the whole rainbow
+        const char* ACCENT_NAMES[ACCENT_COUNT] = {"Blue", "Green", "Pink", "Purple", "Orange", "Rainbow"};
         const ccColor3B ACCENTS[ACCENT_COUNT] = {
-            {74, 158, 255}, {124, 240, 124}, {255, 107, 157}, {179, 124, 255}, {255, 179, 71}
+            {74, 158, 255}, {124, 240, 124}, {255, 107, 157}, {179, 124, 255}, {255, 179, 71}, {255, 255, 255}
         };
+
+        // Colour for a hue between 0 and 1, bright and not too pale.
+        ccColor3B hueColor(float h) {
+            h = h - std::floor(h);
+            float r = std::clamp(std::abs(h * 6.f - 3.f) - 1.f, 0.f, 1.f);
+            float g = std::clamp(2.f - std::abs(h * 6.f - 2.f), 0.f, 1.f);
+            float b = std::clamp(2.f - std::abs(h * 6.f - 4.f), 0.f, 1.f);
+            auto mix = [](float v) { return static_cast<GLubyte>((0.30f + 0.70f * v) * 255.f); };
+            return {mix(r), mix(g), mix(b)};
+        }
+
+        float g_rainbowHue = 0.f; // moved by the open menu
 
         constexpr int OPACITY_COUNT = 3;
         const GLubyte OPACITIES[OPACITY_COUNT] = {170, 210, 245};
@@ -48,8 +61,9 @@ namespace ivey {
         float T() { return 0.42f * fontScale(); }
 
         ccColor3B accentColor() {
-            int i = Bot::get().cfg.accent;
-            return ACCENTS[((i % ACCENT_COUNT) + ACCENT_COUNT) % ACCENT_COUNT];
+            int i = ((Bot::get().cfg.accent % ACCENT_COUNT) + ACCENT_COUNT) % ACCENT_COUNT;
+            if (i == ACCENT_RAINBOW) return hueColor(g_rainbowHue);
+            return ACCENTS[i];
         }
 
         std::string lower(std::string v) {
@@ -334,6 +348,7 @@ namespace ivey {
                         cfg.fx = (cfg.fx + 1) % ThemeFx::count();
                         cfg.save();
                     }, [] { return std::string(ThemeFx::name(Bot::get().cfg.fx)); });
+                    check("Effect Over Buttons", c.fxTop);
                     break;
                 }
                 case 7: { // Labels
@@ -721,19 +736,55 @@ namespace ivey {
         m_statusText = Bot::get().status;
         m_status->setString(m_statusText.substr(0, 48).c_str());
 
+        // the same effect again, over the buttons and text, but much fainter
+        m_fxTop = ThemeFx::create({W - 6.f, H - 6.f});
+        m_fxTop->setPosition({3.f, 3.f});
+        m_fxTop->setAlphaScale(0.28f);
+        m_root->addChild(m_fxTop, 800);
+
         this->schedule(schedule_selector(IveyMenu::sync), 0.2f);
+        this->scheduleUpdate();
         return true;
     }
 
     void IveyMenu::applyTheme() {
         m_bg->setOpacity(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]);
-        if (m_fx) m_fx->setEffect(std::clamp(Bot::get().cfg.fx, 0, ThemeFx::count() - 1), accentColor());
+        auto& cfg = Bot::get().cfg;
+        int fx = std::clamp(cfg.fx, 0, ThemeFx::count() - 1);
+        if (m_fx) m_fx->setEffect(fx, accentColor());
+        if (m_fxTop) m_fxTop->setEffect(cfg.fxTop ? fx : 0, accentColor());
+    }
+
+    // Runs every frame. Only does something when the accent is the moving rainbow.
+    void IveyMenu::update(float dt) {
+        auto& cfg = Bot::get().cfg;
+        if (((cfg.accent % ACCENT_COUNT) + ACCENT_COUNT) % ACCENT_COUNT != ACCENT_RAINBOW) return;
+
+        g_rainbowHue += dt * 0.12f;
+        if (g_rainbowHue > 1000.f) g_rainbowHue -= 1000.f;
+        auto accent = accentColor();
+        ccColor4F accentF = ccc4f(accent.r / 255.f, accent.g / 255.f, accent.b / 255.f, 1.f);
+
+        if (m_tabLine) m_tabLine->setColor(accent);
+        if (m_fx) m_fx->setAccent(accent);
+        if (m_fxTop) m_fxTop->setAccent(accent);
+
+        for (auto& view : m_views) {
+            if (view.mark && view.mark->isVisible()) {
+                if (auto draw = typeinfo_cast<CCDrawNode*>(view.mark)) {
+                    draw->clear();
+                    draw->drawSegment({3.5f, 7.5f}, {6.f, 4.5f}, 0.9f, accentF);
+                    draw->drawSegment({6.f, 4.5f}, {10.5f, 10.f}, 0.9f, accentF);
+                }
+            }
+            if (view.lit && view.detail) view.detail->setColor(accent);
+        }
     }
 
     std::string IveyMenu::structureKey() const {
         auto& bot = Bot::get();
-        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
-                           bot.cfg.fx, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
+        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
+                           bot.cfg.fx, bot.cfg.fxTop, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
                (Renderer::get().active() ? "|r" : "|-") + (Renderer::get().available() ? "a" : "x");
     }
 
@@ -781,6 +832,7 @@ namespace ivey {
                     view.detailText = text;
                     view.detail->setString(text.c_str());
                     bool lit = text == "active" || text == "loaded";
+                    view.lit = lit;
                     view.detail->setColor(lit ? accentColor() : ccColor3B{150, 150, 150});
                 }
             }
@@ -790,6 +842,7 @@ namespace ivey {
     void IveyMenu::rebuildTabs() {
         m_tabMenu->removeAllChildrenWithCleanup(true);
         m_tabDeco->removeAllChildrenWithCleanup(true);
+        m_tabLine = nullptr;
 
         float x = 8.f;
         int row = 0;
@@ -823,6 +876,7 @@ namespace ivey {
                 node->addChild(CCLayerColor::create({60, 60, 60, 255}, w, 16.f));
                 auto line = CCLayerColor::create({accentColor().r, accentColor().g, accentColor().b, 255}, w, 2.f);
                 node->addChild(line, 1);
+                m_tabLine = line;
                 lbl->setColor({245, 245, 245});
             }
             else {
@@ -968,6 +1022,7 @@ namespace ivey {
                 styleText(det, 0.40f);
                 det->setAnchorPoint({1.f, 0.5f});
                 bool lit = view.detailText == "active" || view.detailText == "loaded";
+                view.lit = lit;
                 det->setColor(lit ? accent : ccColor3B{150, 150, 150});
                 det->setPosition({rowW - 6.f, rowH / 2.f});
                 holder->addChild(det, 1);
