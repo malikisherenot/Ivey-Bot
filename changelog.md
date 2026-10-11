@@ -1,5 +1,9 @@
 # Ivey Bot Changelog
 
+## v1.17.2
+
+- Overlay shows Moves/s, Hook/s and Hook step when TPS is not 240
+
 ## v1.17.1
 
 - TPS loop no longer slows the game at high TPS
