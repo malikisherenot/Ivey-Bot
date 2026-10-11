@@ -5,6 +5,7 @@
 #include <cmath>
 #include <climits>
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/loader/Hook.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/EditorUI.hpp>
@@ -323,6 +324,17 @@ namespace {
         return CCMenuItemSpriteExtra::create(spr, target, handler);
     }
 
+    // Looks for the step-size hook in the list of hooks of this mod. If it is installed but off, it is turned on.
+    std::string inspectDeltaHook() {
+        for (auto hook : Mod::get()->getHooks()) {
+            if (!hook) continue;
+            if (hook->getDisplayName().find("getModifiedDelta") == std::string::npos) continue;
+            if (hook->isEnabled()) return "on";
+            return hook->enable().isOk() ? "was off, turned on" : "off";
+        }
+        return "not installed";
+    }
+
     // Small text overlay shown inside levels.
     class Overlay : public CCNode {
         CCLabelBMFont* m_label = nullptr;
@@ -492,8 +504,12 @@ namespace {
                 s += "\n";
                 // For finding out why a TPS does not behave: does the hook run, and does every step move the clock?
                 if (activeTps() != 240.f) {
-                    s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}\n", m_moves, m_hook,
-                                     bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0);
+                    if (bot.hookState.empty()) bot.hookState = inspectDeltaHook();
+                    s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {}\n", m_moves, m_hook,
+                                     bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState);
+                    if (m_calls > 100.f && m_hook < 1.f && !cfg.tpsClassic) {
+                        s += "The step size hook is not running, the physics stays at 240\n";
+                    }
                 }
             }
             if (cfg.autoSafe && bot.safeMode) s += "Safe Mode\n";
