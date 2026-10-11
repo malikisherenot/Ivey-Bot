@@ -202,6 +202,19 @@ namespace ivey {
                         nullptr, tpsText
                     });
                     editable("TPS", tpsValue, 1, 65535, setTps);
+                    action("TPS Method", [] {
+                        auto& cfg = Bot::get().cfg;
+                        cfg.tpsMethod = (cfg.tpsMethod + 1) % 3;
+                        cfg.save();
+                        Bot::get().resetStepping();
+                    }, [] {
+                        auto& bot = Bot::get();
+                        switch (bot.cfg.tpsMethod) {
+                            case 1: return std::string("step hook");
+                            case 2: return std::string("time warp");
+                            default: return std::string(bot.hookMissing ? "auto (time warp)" : "auto");
+                        }
+                    });
                     check("Classic TPS Loop", c.tpsClassic, nullptr,
                           [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
                     check("Position Correction", c.correction, nullptr,
@@ -480,7 +493,7 @@ namespace ivey {
 
             // Arrows are only for rows that step through values or settings.
             for (auto& row : r) {
-                if (row.label == "Accent Color" || row.label == "Window Opacity" || row.label == "Window Effect" || row.label == "Resolution" || row.label == "Codec") row.arrowIcon = true;
+                if (row.label == "Accent Color" || row.label == "Window Opacity" || row.label == "Window Effect" || row.label == "TPS Method" || row.label == "Resolution" || row.label == "Codec") row.arrowIcon = true;
             }
 
             // Thin lines that group related rows.
