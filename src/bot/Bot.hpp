@@ -74,6 +74,8 @@ namespace ivey {
 
         Backup backup;
         uint32_t previousFrame = 0;
+        bool editorWasDead = false;  // editor playtest: for noticing a restart
+        double editorLastTime = 0.0;
         int  preventSkip = 0;        // steps where Prevent Death stays quiet after the stepper was turned off
         bool safeMode = false;
         int stepsPending = 0;

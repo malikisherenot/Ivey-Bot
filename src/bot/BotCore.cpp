@@ -330,6 +330,10 @@ namespace ivey {
             status = "No macro loaded";
             return;
         }
+        if (m == Mode::Record && !PlayLayer::get() && LevelEditorLayer::get()) {
+            status = "Recording is not available in the editor";
+            return;
+        }
 
         mode = m;
         resetStepping();
@@ -356,7 +360,7 @@ namespace ivey {
         }
         else if (m == Mode::Replay) {
             applyMacroSettings();
-            status = "Replaying, restart the level";
+            status = (!PlayLayer::get() && LevelEditorLayer::get()) ? "Replaying, start the playtest" : "Replaying, restart the level";
         }
         else {
             continuing = false;
