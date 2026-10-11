@@ -1,5 +1,16 @@
 # Ivey Bot Changelog
 
+## v1.17.1
+
+- TPS loop no longer slows the game at high TPS
+- Prevent Death looks ahead once per frame
+- Overlay shows Steps/s and Progress/s
+
+## v1.17.0
+
+- Replay macros in the level editor playtest
+- Menu button in the editor pause menu
+
 ## v1.16.1
 
 - Classic TPS Loop (xdBot method) to compare with
