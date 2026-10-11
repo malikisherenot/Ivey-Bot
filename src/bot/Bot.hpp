@@ -82,6 +82,7 @@ namespace ivey {
         bool swiftBusy = false;
         float leftOver = 0.f; // time the TPS stepping has not used yet
         bool stepping = false; // true while the TPS loop is running its steps
+        unsigned long long stepCalls = 0; // physics steps made so far (for the Steps/s readout)
         double stepAdvance = 0.0; // level time one step really advances (measured)
         bool tpsHonored = true;   // false if the game ignores the step size it is given
 

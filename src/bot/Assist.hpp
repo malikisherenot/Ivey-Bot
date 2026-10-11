@@ -7,6 +7,10 @@ namespace ivey {
         // if it keeps the input it has now. Uses the trajectory copy, nothing in the real game changes.
         bool wouldDie(PlayLayer* pl, int frames);
 
+        // How many steps until the first player dies, or -1 if nobody dies within `frames` steps.
+        // `who` gets the player (0 or 1).
+        int deathIn(PlayLayer* pl, int frames, int* who);
+
         // Draws the hitboxes of everything near the screen. Called once per screen frame.
         void drawHitboxes(PlayLayer* pl);
 

@@ -60,6 +60,30 @@ namespace ivey::Assist {
         return false;
     }
 
+    int deathIn(PlayLayer* pl, int frames, int* who) {
+        auto& t = Trajectory::get();
+        if (who) *who = -1;
+        if (!pl || frames <= 0 || t.creating()) return -1;
+        if (!pl->m_player1 || pl->m_player1->m_isDead) return -1;
+
+        int best = -1;
+        bool dual = pl->m_gameState.m_isDualMode && pl->m_player2;
+        for (int p = 0; p < (dual ? 2 : 1); ++p) {
+            PlayerObject* real = p == 0 ? pl->m_player1 : pl->m_player2;
+            PlayerObject* copy = t.copyFor(p);
+            if (!real || !copy || real->m_isDead) continue;
+
+            // keep the input the player has right now
+            Path path = real->m_jumpBuffered ? t.simulateHold(pl, real, copy, frames)
+                                             : t.simulateRelease(pl, real, copy, frames);
+            if (path.died && (best < 0 || path.deathFrame < best)) {
+                best = path.deathFrame;
+                if (who) *who = p;
+            }
+        }
+        return best;
+    }
+
     void drawHitboxes(PlayLayer* pl) {
         auto& cfg = Bot::get().cfg;
         if (!pl || !pl->m_objectLayer) return;
