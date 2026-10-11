@@ -71,3 +71,7 @@ Needs the [Geode SDK](https://docs.geode-sdk.org). GitHub Actions builds every p
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## Editor
+
+Load a macro, press **Replay**, then start a playtest in the editor. The menu button is in the editor pause menu. Recording is not available in the editor.

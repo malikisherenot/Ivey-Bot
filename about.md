@@ -3,6 +3,7 @@
 Frame-accurate macro bot.
 
 - Record and replay
+- Replay in the editor
 - Position correction
 - Own `.ivey` format
 - Import `.gdr`, `.gdr2`, `.gdr.json`
