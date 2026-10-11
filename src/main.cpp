@@ -212,7 +212,7 @@ namespace {
         // The editor counts them twice as fast.
         if (bot.mode == Mode::Replay && (bot.macro.flags & 4)) {
             int steps = gl->m_gameState.m_currentProgress;
-            if (editor) steps /= 2;
+            if (editor) steps = steps / 2 + bot.editorOffset;
             return steps < 0 ? 0u : static_cast<uint32_t>(steps);
         }
 
@@ -223,6 +223,7 @@ namespace {
         }
 
         int frame = static_cast<int>(time * static_cast<double>(activeTps())) + 1;
+        if (editor) frame += bot.editorOffset;
         return frame < 0 ? 0u : static_cast<uint32_t>(frame);
     }
 
@@ -763,11 +764,32 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 m_gameState.m_levelTime = 0.0;
                 m_gameState.m_currentProgress = 0;
                 bot.resetStepping();
-                bot.onReset(frameOf(this));
+                bot.editorAlign = true; // starts again from the start position
                 now = 0.0;
             }
             bot.editorWasDead = dead;
             bot.editorLastTime = now;
+
+            // Where does this playtest begin? From the start of the level it is frame 1. From a start
+            // position the macro is entered at the frame where the player was at that spot.
+            if (bot.editorAlign && m_player1) {
+                bot.editorAlign = false;
+                bot.editorOffset = 0;
+
+                float distance = -1.f;
+                uint32_t atFrame = bot.frameAtPosition(m_player1->getPositionX(), m_player1->getPositionY(), &distance);
+                if (distance >= 0.f && atFrame > 1) {
+                    bot.editorOffset = static_cast<int>(atFrame) - 1;
+                    bot.status = distance > 60.f
+                        ? fmt::format("Start position is {:.0f} units from the macro, playing from frame {}", distance, atFrame)
+                        : fmt::format("Playing from frame {}", atFrame);
+                }
+                else if (distance < 0.f) {
+                    bot.status = "No positions in the macro, playing from the start";
+                }
+                bot.previousFrame = 0;
+                bot.onReset(frameOf(this));
+            }
 
             uint32_t before = frameOf(this);
             if (before == bot.previousFrame && before != 0) {
@@ -972,7 +994,8 @@ class $modify(IveyEditorUI, EditorUI) {
             m_editorLayer->m_gameState.m_levelTime = 0.0;
             m_editorLayer->m_gameState.m_currentProgress = 0;
             bot.onEnter(m_editorLayer);
-            bot.onReset(0);
+            bot.editorOffset = 0;
+            bot.editorAlign = true; // done on the first step, when the player is on its start position
             bot.resetStepping();
             bot.fixes = 0;
             bot.editorWasDead = false;
