@@ -3,6 +3,7 @@
 #include <chrono>
 #include <unordered_set>
 #include <cmath>
+#include <climits>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
@@ -330,6 +331,8 @@ namespace {
         std::chrono::steady_clock::time_point m_lastTime = std::chrono::steady_clock::now();
         float m_running = 0.f;
         double m_lastLevel = 0.0;   // level time at the last check, for the Speed readout
+        unsigned long long m_lastCalls = 0;
+        float m_calls = 0.f;        // physics steps really made per second
         float m_speed = 100.f;      // game seconds per real second, in percent
         CCMenu* m_renderMenu = nullptr;
 
@@ -450,6 +453,8 @@ namespace {
                     double level = pl->m_gameState.m_levelTime;
                     m_speed = level >= m_lastLevel ? static_cast<float>((level - m_lastLevel) / secs * 100.0) : 0.f;
                     m_lastLevel = level;
+                    m_calls = bot.stepCalls >= m_lastCalls ? static_cast<float>((bot.stepCalls - m_lastCalls) / secs) : 0.f;
+                    m_lastCalls = bot.stepCalls;
                     m_lastProgress = progress;
                     m_lastTime = now;
                 }
@@ -472,10 +477,11 @@ namespace {
                 // Running below the TPS means the device can't keep up (see Step Budget).
                 auto& traj = ivey::Trajectory::get();
                 std::string stepText = traj.deltaSeen && traj.delta > 0.f ? fmt::format("{:.0f}", 60.f / traj.delta) : std::string("?");
-                s += fmt::format("Accuracy: {} TPS  Step: {}  Running: {:.0f}  Speed: {:.0f}%", cfg.frameAccurate ? cfg.tps : 0, stepText, m_running, m_speed);
+                s += fmt::format("Accuracy: {} TPS  Step: {}  Steps/s: {:.0f}  Progress/s: {:.0f}  Speed: {:.0f}%",
+                                 cfg.frameAccurate ? cfg.tps : 0, stepText, m_calls, m_running, m_speed);
                 float tpsNow = activeTps();
                 if (tpsNow != 240.f && !bot.tpsHonored) s += "  (game ignores TPS)";
-                else if (tpsNow != 240.f && !cfg.stepper && m_running > 1.f && m_running < tpsNow * 0.9f) s += "  (slow)";
+                else if (tpsNow != 240.f && !cfg.stepper && m_calls > 1.f && m_calls < tpsNow * 0.9f) s += "  (slow)";
                 if (bot.mode == Mode::Replay && cfg.correction) s += fmt::format("  Fixes: {}", bot.fixes);
                 s += "\n";
             }
@@ -564,6 +570,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                     --bot.stepsPending;
                     bot.safeMode = true;
                     GJBaseGameLayer::update(1.f / activeTps());
+                    ++bot.stepCalls;
                     ivey::Assist::trailStep(PlayLayer::get());
                 }
                 return;
@@ -595,6 +602,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             bot.stepping = true;
             for (int i = 0; i < mult; ++i) {
                 GJBaseGameLayer::update(newDt);
+                ++bot.stepCalls;
                 if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
                 if (std::chrono::high_resolution_clock::now() - begin > limit) {
                     mult = i + 1;
@@ -619,47 +627,62 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         auto startTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> budget(ivey::Renderer::get().active() ? 1.0e7 : static_cast<double>(bot.cfg.stepBudget));
 
-        // How much level time one call really advances. It should be 1 / TPS.
-        // If the game ignores the step size it is given, counting what really
-        // happened keeps the game at normal speed instead of running fast.
+        // How much level time one call really advances on average. It should be 1 / TPS.
+        // If the game ignores the step size it is given, counting what really happened
+        // keeps the game at normal speed instead of running fast.
         double unit = bot.stepAdvance > 0.0 ? bot.stepAdvance : static_cast<double>(newDt);
-        double simulated = 0.0;
+        double levelStart = m_gameState.m_levelTime;
+        double callsTime = 0.0; // time the calls would take if each one moved exactly 1 / TPS
+
+        // Prevent Death looks ahead once per frame (not once per step): it is far cheaper,
+        // and the frame is simply stopped a few steps before the death.
+        int stopAfter = INT_MAX;
+        int predicted = -1, predictedWho = -1;
+        if (bot.cfg.preventDeath && bot.preventSkip <= 0 && bot.mode != Mode::Replay &&
+            !ivey::Renderer::get().active() && inPlay(this)) {
+            int span = static_cast<int>(realDt / newDt) + bot.cfg.preventFrames + 2;
+            predicted = ivey::Assist::deathIn(PlayLayer::get(), span, &predictedWho);
+            if (predicted >= 0) stopAfter = std::max(0, predicted - bot.cfg.preventFrames);
+        }
 
         bool paused = false;
+        int done = 0;
         bot.stepping = true;
-        for (int i = 0; i < 20000 && simulated + unit * 0.999 <= static_cast<double>(realDt); ++i) {
-            // Prevent Death: stop before a step that would kill the player, like the frame stepper.
-            if (bot.preventSkip > 0) --bot.preventSkip; // just left the stepper, let the player act
-            else if (bot.cfg.preventDeath && bot.mode != Mode::Replay && !ivey::Renderer::get().active() &&
-                inPlay(this) && ivey::Assist::wouldDie(PlayLayer::get(), bot.cfg.preventFrames)) {
+        for (int i = 0; i < 20000; ++i) {
+            double simulatedNow = m_gameState.m_levelTime - levelStart;
+            if (simulatedNow + unit * 0.999 > static_cast<double>(realDt)) break;
+            if (callsTime + static_cast<double>(newDt) * 0.999 > static_cast<double>(realDt)) break; // never more calls than a plain loop
+
+            if (done >= stopAfter) {
                 bot.cfg.stepper = true;
                 bot.stepsPending = 0;
                 bot.safeMode = true; // seeing a death coming is an advantage, the run does not count
-                bot.status = "Prevent Death: paused, click and step";
+                bot.status = fmt::format("Prevent Death: P{} dies in {} frames, click and step", predictedWho + 1, predicted - done);
                 paused = true;
                 break;
             }
 
-            double before = m_gameState.m_levelTime;
             GJBaseGameLayer::update(newDt);
+            ++done;
+            ++bot.stepCalls;
+            callsTime += static_cast<double>(newDt);
+            if (bot.preventSkip > 0) --bot.preventSkip; // just left the stepper, let the player act
             if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
-            double advance = m_gameState.m_levelTime - before;
-
-            if (advance > 1e-9) {
-                simulated += advance;
-                bot.stepAdvance = bot.stepAdvance > 0.0 ? bot.stepAdvance * 0.8 + advance * 0.2 : advance;
-                unit = bot.stepAdvance;
-            }
-            else {
-                simulated += unit; // nothing moved (paused, dead, finished), this still ends the loop
-            }
 
             if (std::chrono::high_resolution_clock::now() - startTime > budget) break;
         }
         bot.stepping = false;
 
+        double simulated = m_gameState.m_levelTime - levelStart;
+        if (done > 0 && simulated > 1e-9) {
+            double perCall = simulated / static_cast<double>(done);
+            bot.stepAdvance = bot.stepAdvance > 0.0 ? bot.stepAdvance * 0.8 + perCall * 0.2 : perCall;
+        }
+        // Nothing moved (paused, dead, finished): the time still counts as used.
+        double consumed = simulated > 1e-9 ? simulated : callsTime;
+
         bot.tpsHonored = bot.stepAdvance <= 0.0 || std::abs(bot.stepAdvance - static_cast<double>(newDt)) < static_cast<double>(newDt) * 0.25;
-        bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) - simulated, -0.05, 1.0));
+        bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) - consumed, -0.05, 1.0));
         if (paused) bot.leftOver = 0.f; // no time is saved up while paused
 
         // The trajectory runs once per screen frame, outside the step budget.
