@@ -38,6 +38,7 @@ namespace ivey {
         std::string renderCodec;   // empty = pick one automatically
         int  corrInterval = 4;
         int  waveInterval = 1;
+        int  tpsMethod = 0;          // above 240 TPS: 0 auto, 1 step size hook, 2 time warp
         bool tpsClassic = false;     // step loop copied from xdBot, for comparing
         int  stepBudget = 33; // ms of stepping allowed per screen frame
         int  tps = 240;
@@ -88,6 +89,9 @@ namespace ivey {
         unsigned long long stepMoves = 0; // calls that really moved the level clock
         unsigned long long hookCalls = 0; // times our step-size hook ran
         double hookLast = 0.0;            // what it returned last
+        bool hookSeen = false;            // the step-size hook has run at least once above 240 TPS
+        bool hookMissing = false;         // it is known not to run on this device
+        int  noHookCalls = 0;
         std::string hookState;            // is the step-size hook installed and on (checked once)
         unsigned long long stepCalls = 0; // physics steps made so far (for the Steps/s readout)
         double stepAdvance = 0.0; // level time one step really advances (measured)
