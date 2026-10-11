@@ -1,5 +1,10 @@
 # Ivey Bot Changelog
 
+## v1.18.1
+
+- TPS above 240 works without the step size hook (time warp method)
+- TPS Method in the Bot tab
+
 ## v1.18.0
 
 - Editor playtest can start from a start position
