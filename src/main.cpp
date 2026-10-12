@@ -195,6 +195,8 @@ namespace {
         return static_cast<float>(bot.cfg.tps);
     }
 
+    bool useWarp(float tps); // defined further down
+
     // A playtest in the level editor that is replaying a macro.
     bool editorReplay(GJBaseGameLayer* gl) {
         if (Bot::get().mode != Mode::Replay || PlayLayer::get()) return false;
@@ -222,7 +224,9 @@ namespace {
             time = static_cast<double>(gl->m_gameState.m_currentProgress / 2) / 240.0;
         }
 
-        int frame = static_cast<int>(time * static_cast<double>(activeTps())) + 1;
+        // With the time warp method the level time moves 1 / 240 for every step, whatever the TPS is.
+        double rate = useWarp(activeTps()) ? 240.0 : static_cast<double>(activeTps());
+        int frame = static_cast<int>(time * rate) + 1;
         if (editor) frame += bot.editorOffset;
         return frame < 0 ? 0u : static_cast<uint32_t>(frame);
     }
@@ -490,6 +494,11 @@ namespace {
             auto& cfg = bot.cfg;
             auto pl = PlayLayer::get();
 
+            // The labels would show through the half see-through menu, so they wait until it is closed.
+            bool menuOpen = ivey::IveyMenu::get() != nullptr;
+            this->setVisible(!menuOpen);
+            if (menuOpen) return;
+
             auto& render = ivey::Renderer::get();
             m_renderMenu->setVisible(pl && render.active());
             if (render.active()) {
@@ -510,6 +519,8 @@ namespace {
                     m_lastLevel = level;
                     m_calls = bot.stepCalls >= m_lastCalls ? static_cast<float>((bot.stepCalls - m_lastCalls) / secs) : 0.f;
                     m_lastCalls = bot.stepCalls;
+                    // With the time warp method the level clock says nothing about the speed, the steps do.
+                    if (useWarp(activeTps())) m_speed = m_calls / activeTps() * 100.f;
                     m_moves = bot.stepMoves >= m_lastMoves ? static_cast<float>((bot.stepMoves - m_lastMoves) / secs) : 0.f;
                     m_lastMoves = bot.stepMoves;
                     m_hook = bot.hookCalls >= m_lastHook ? static_cast<float>((bot.hookCalls - m_lastHook) / secs) : 0.f;
@@ -549,8 +560,10 @@ namespace {
                         bot.hookState = inspectDeltaHook();
                         if (bot.hookState == "not installed") bot.hookMissing = true;
                     }
-                    s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {}\n", m_moves, m_hook,
-                                     bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState);
+                    if (cfg.devMode) {
+                        s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {}\n", m_moves, m_hook,
+                                         bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState);
+                    }
                     if (activeTps() > 240.f && useWarp(activeTps())) {
                         s += "No step size hook on this device: using the time warp method\n";
                     }
@@ -558,6 +571,11 @@ namespace {
                         s += "The step size hook is not running, the physics stays at 240\n";
                     }
                 }
+            }
+            if (cfg.devMode && pl) {
+                s += fmt::format("Dev: time {:.3f}  progress {}  method {}  hook missing {}  steps {}\n",
+                                 pl->m_gameState.m_levelTime, pl->m_gameState.m_currentProgress, cfg.tpsMethod,
+                                 bot.hookMissing ? "yes" : "no", bot.stepCalls);
             }
             if (cfg.autoSafe && bot.safeMode) s += "Safe Mode\n";
             if (cfg.stepper) s += fmt::format("Stepper: {} queued\n", bot.stepsPending);
@@ -709,7 +727,9 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // How much level time one call really advances on average. It should be 1 / TPS.
         // If the game ignores the step size it is given, counting what really happened
         // keeps the game at normal speed instead of running fast.
-        double unit = bot.stepAdvance > 0.0 ? bot.stepAdvance : static_cast<double>(newDt);
+        // With the time warp method the level clock does not show the step size, so the steps are counted.
+        bool warping = useWarp(tps);
+        double unit = (!warping && bot.stepAdvance > 0.0) ? bot.stepAdvance : static_cast<double>(newDt);
         double levelStart = m_gameState.m_levelTime;
         double callsTime = 0.0; // time the calls would take if each one moved exactly 1 / TPS
 
@@ -729,7 +749,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         WarpGuard warp(this, useWarp(tps), tps);
         bot.stepping = true;
         for (int i = 0; i < 20000; ++i) {
-            double simulatedNow = m_gameState.m_levelTime - levelStart;
+            double simulatedNow = warping ? callsTime : (m_gameState.m_levelTime - levelStart);
             if (simulatedNow + unit * 0.999 > static_cast<double>(realDt)) break;
             if (callsTime + static_cast<double>(newDt) * 0.999 > static_cast<double>(realDt)) break; // never more calls than a plain loop
 
@@ -762,8 +782,11 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             if (bot.noHookCalls > 120) bot.hookMissing = true;
         }
 
-        double simulated = m_gameState.m_levelTime - levelStart;
-        if (done > 0 && simulated > 1e-9) {
+        double simulated = warping ? callsTime : (m_gameState.m_levelTime - levelStart);
+        if (warping) {
+            bot.stepAdvance = static_cast<double>(newDt);
+        }
+        else if (done > 0 && simulated > 1e-9) {
             double perCall = simulated / static_cast<double>(done);
             bot.stepAdvance = bot.stepAdvance > 0.0 ? bot.stepAdvance * 0.8 + perCall * 0.2 : perCall;
         }
