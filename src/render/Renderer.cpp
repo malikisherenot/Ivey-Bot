@@ -203,8 +203,8 @@ namespace ivey {
 
     std::vector<std::string> Renderer::codecs() const {
         static char const* const preferred[] = {
-            "libx264", "h264_nvenc", "h264_videotoolbox", "h264_mediacodec", "h264_amf", "h264_qsv",
-            "libopenh264", "libx265", "hevc_nvenc", "hevc_videotoolbox", "hevc_mediacodec", "libvpx-vp9", "libaom-av1"
+            "h264_mediacodec", "h264_videotoolbox", "h264_nvenc", "h264_amf", "h264_qsv",
+            "libopenh264", "libx264", "hevc_mediacodec", "hevc_videotoolbox", "hevc_nvenc", "libx265", "libvpx-vp9", "libaom-av1"
         };
 
         auto all = ffmpeg::events::Recorder::getAvailableCodecs();
@@ -327,6 +327,7 @@ namespace ivey {
         auto path = makePath();
         m_fileName = path.filename().string();
         m_videoPath = path;
+        m_usedCodec = codec;
 
         // the song is added when the video is done
         m_audio = cfg.renderAudio;
@@ -632,12 +633,16 @@ namespace ivey {
             auto song = m_songFile;
             auto offset = m_songOffset;
             auto name = m_fileName;
+            auto codecName = m_usedCodec;
             auto tempDir = Mod::get()->getSaveDir();
 
-            std::thread([video, song, offset, duration, name, tempDir] {
+            std::thread([video, song, offset, duration, name, codecName, tempDir] {
                 std::string why = addSong(video, song, offset, duration, tempDir);
-                Loader::get()->queueInMainThread([why, name] {
-                    std::string text = why.empty() ? "Audio added to " + name : "Saved " + name + " without audio: " + why;
+                Loader::get()->queueInMainThread([why, name, codecName] {
+                    if (!why.empty()) log::error("Adding audio failed (video codec {}): {}", codecName, why);
+                    std::string text = why.empty()
+                        ? "Audio added to " + name
+                        : "Saved " + name + " without audio (" + codecName + "): " + why + ". Try another Codec in Render.";
                     Bot::get().status = text;
                     Notification::create(text, why.empty() ? NotificationIcon::Success : NotificationIcon::Warning, 5.f)->show();
                 });

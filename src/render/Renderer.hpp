@@ -83,6 +83,7 @@ namespace ivey {
         // the song that is added to the video when it is finished
         bool m_audio = false;
         std::string m_songFile;
+        std::string m_usedCodec;
         double m_songOffset = 0.0;
         std::filesystem::path m_videoPath;
 
