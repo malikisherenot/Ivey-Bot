@@ -94,7 +94,8 @@ namespace ivey {
         bool hookSeen = false;            // the step-size hook has run at least once above 240 TPS
         bool hookMissing = false;         // it is known not to run on this device
         int  noHookCalls = 0;
-        std::string hookState;            // is the step-size hook installed and on (checked once)
+        std::string hookState;
+        std::string hookInfo;             // how many hooks the mod has, for developer mode            // is the step-size hook installed and on (checked once)
         unsigned long long stepCalls = 0; // physics steps made so far (for the Steps/s readout)
         double stepAdvance = 0.0; // level time one step really advances (measured)
         bool tpsHonored = true;   // false if the game ignores the step size it is given
