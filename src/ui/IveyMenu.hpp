@@ -120,6 +120,10 @@ namespace ivey {
         bool m_editClose = false;
         int m_tab = 0;
         int m_tabRows = 1;
+        int m_page = 0;          // page of rows, for tabs with more rows than fit
+        int m_pageTab = -1;
+        int m_pages = 1;
+        void onPage(cocos2d::CCObject* sender);
         bool m_searchOpen = false;
     };
 }

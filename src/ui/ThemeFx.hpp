@@ -4,14 +4,14 @@
 namespace ivey {
 
     // An animated colour layer behind the menu, drawn with a small shader.
-    // Effects: 0 off, 1 Aurora, 2 Rainbow, 3 Scanlines, 4 Frost, 5 Pastel, 6 Snow.
+    // Effects: 0 off, 1 Aurora, 2 Rainbow, 3 Scanlines, 4 Frost, 5 Pastel, 6 Snow, 7 Plasma, 8 Rain (7 and 8 only in developer mode).
     class ThemeFx : public cocos2d::CCNode {
     public:
         static ThemeFx* create(cocos2d::CCSize size);
         void setEffect(int effect, cocos2d::ccColor3B accent);
         void setAccent(cocos2d::ccColor3B accent); // only the colour, for an accent that moves
         void setAlphaScale(float scale);           // 1 = full, lower = fainter (the layer over the buttons)
-        static int count();
+        static int count(bool dev = false); // developer mode has two more effects
         static char const* name(int effect);
 
         ~ThemeFx() override;

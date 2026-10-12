@@ -3,6 +3,7 @@
 #include "../bot/Bot.hpp"
 #include "../render/Renderer.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -358,10 +359,36 @@ namespace ivey {
                     }, [] { return fmt::format("{}", OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]); });
                     action("Window Effect", [] {
                         auto& cfg = Bot::get().cfg;
-                        cfg.fx = (cfg.fx + 1) % ThemeFx::count();
+                        cfg.fx = (cfg.fx + 1) % ThemeFx::count(cfg.devMode);
                         cfg.save();
                     }, [] { return std::string(ThemeFx::name(Bot::get().cfg.fx)); });
                     check("Effect Over Buttons", c.fxTop);
+                    if (c.devMode) {
+                        action("Effect Over Buttons Strength", [] {
+                            auto& cfg = Bot::get().cfg;
+                            cfg.fxTopPct = cfg.fxTopPct >= 60 ? 15 : (cfg.fxTopPct >= 40 ? 60 : (cfg.fxTopPct >= 28 ? 40 : 28));
+                            cfg.save();
+                        }, [] { return fmt::format("{}%", Bot::get().cfg.fxTopPct); });
+                    }
+                    action("Version", [] {
+                        // Tapping it 7 times in a row turns developer mode on or off.
+                        static int taps = 0;
+                        static auto last = std::chrono::steady_clock::now();
+                        auto now = std::chrono::steady_clock::now();
+                        if (now - last > std::chrono::seconds(2)) taps = 0;
+                        last = now;
+                        auto& bot = Bot::get();
+                        if (++taps >= 7) {
+                            taps = 0;
+                            bot.cfg.devMode = !bot.cfg.devMode;
+                            if (!bot.cfg.devMode && bot.cfg.fx > 6) bot.cfg.fx = 0;
+                            bot.cfg.save();
+                            bot.status = bot.cfg.devMode ? "Developer mode on" : "Developer mode off";
+                        }
+                        else if (taps >= 3) {
+                            bot.status = fmt::format("{} more taps", 7 - taps);
+                        }
+                    }, [] { return Mod::get()->getVersion().toVString(); });
                     break;
                 }
                 case 7: { // Labels
@@ -752,7 +779,7 @@ namespace ivey {
         // the same effect again, over the buttons and text, but much fainter
         m_fxTop = ThemeFx::create({W - 6.f, H - 6.f});
         m_fxTop->setPosition({3.f, 3.f});
-        m_fxTop->setAlphaScale(0.28f);
+        m_fxTop->setAlphaScale(static_cast<float>(Bot::get().cfg.fxTopPct) / 100.f);
         m_root->addChild(m_fxTop, 800);
 
         this->schedule(schedule_selector(IveyMenu::sync), 0.2f);
@@ -763,9 +790,12 @@ namespace ivey {
     void IveyMenu::applyTheme() {
         m_bg->setOpacity(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]);
         auto& cfg = Bot::get().cfg;
-        int fx = std::clamp(cfg.fx, 0, ThemeFx::count() - 1);
+        int fx = std::clamp(cfg.fx, 0, ThemeFx::count(Bot::get().cfg.devMode) - 1);
         if (m_fx) m_fx->setEffect(fx, accentColor());
-        if (m_fxTop) m_fxTop->setEffect(cfg.fxTop ? fx : 0, accentColor());
+        if (m_fxTop) {
+            m_fxTop->setAlphaScale(static_cast<float>(cfg.fxTopPct) / 100.f);
+            m_fxTop->setEffect(cfg.fxTop ? fx : 0, accentColor());
+        }
     }
 
     // Runs every frame. Only does something when the accent is the moving rainbow.
@@ -796,8 +826,8 @@ namespace ivey {
 
     std::string IveyMenu::structureKey() const {
         auto& bot = Bot::get();
-        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
-                           bot.cfg.fx, bot.cfg.fxTop, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
+        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
+                           bot.cfg.fx, bot.cfg.fxTop, bot.cfg.devMode, bot.cfg.fxTopPct, m_page, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
                (Renderer::get().active() ? "|r" : "|-") + (Renderer::get().available() ? "a" : "x");
     }
 
@@ -968,8 +998,11 @@ namespace ivey {
         m_content->removeAllChildrenWithCleanup(true);
         m_views.clear();
         showSearch(m_tab == TAB_SEARCH);
-        m_rows = rowsFor(m_tab, m_query);
-        m_built = structureKey();
+        if (m_tab != m_pageTab) {
+            m_pageTab = m_tab;
+            m_page = 0;
+        }
+        auto allRows = rowsFor(m_tab, m_query);
 
         auto accent = accentColor();
         ccColor4F accentF = ccc4f(accent.r / 255.f, accent.g / 255.f, accent.b / 255.f, 1.f);
@@ -978,6 +1011,43 @@ namespace ivey {
         float rowH = ROW_H - 2.f;
         float y = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f - ROW_H / 2.f;
         if (m_tab == TAB_SEARCH) y -= 24.f; // room for the search box
+
+        // Only as many rows as fit above the status line. The rest are on the next pages.
+        constexpr float FOOTER = 26.f;
+        auto capacity = static_cast<size_t>(std::max(1.f, std::floor((y - FOOTER - ROW_H / 2.f) / ROW_H) + 1.f));
+        m_pages = std::max(1, static_cast<int>((allRows.size() + capacity - 1) / capacity));
+        m_page = std::clamp(m_page, 0, m_pages - 1);
+        size_t first = static_cast<size_t>(m_page) * capacity;
+        size_t last = std::min(allRows.size(), first + capacity);
+        m_rows.assign(allRows.begin() + static_cast<std::ptrdiff_t>(first), allRows.begin() + static_cast<std::ptrdiff_t>(last));
+        m_built = structureKey();
+
+        if (m_pages > 1) {
+            auto pageButton = [&](char const* text, float x, int dir) {
+                auto node = CCNode::create();
+                node->setContentSize({16.f, 14.f});
+                node->setAnchorPoint({0.5f, 0.5f});
+                node->addChild(CCLayerColor::create({60, 60, 60, 255}, 16.f, 14.f));
+                auto l = CCLabelBMFont::create(text, fontName().c_str());
+                styleText(l, 0.45f);
+                l->setColor({225, 225, 225});
+                l->setPosition({8.f, 7.f});
+                node->addChild(l, 1);
+                auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(IveyMenu::onPage));
+                item->m_scaleMultiplier = 1.f;
+                item->setTag(dir);
+                item->setPosition({x, 12.f});
+                m_content->addChild(item);
+            };
+            pageButton("<", W - 92.f, -1);
+            pageButton(">", W - 52.f, 1);
+
+            auto pageLabel = CCLabelBMFont::create(fmt::format("{}/{}", m_page + 1, m_pages).c_str(), fontName().c_str());
+            styleText(pageLabel, 0.38f);
+            pageLabel->setColor({190, 190, 190});
+            pageLabel->setPosition({W - 72.f, 12.f});
+            m_content->addChild(pageLabel, 1);
+        }
 
         for (size_t i = 0; i < m_rows.size(); ++i) {
             auto& row = m_rows[i];
@@ -1073,6 +1143,12 @@ namespace ivey {
             m_views.push_back(view);
             y -= ROW_H;
         }
+    }
+
+    void IveyMenu::onPage(CCObject* sender) {
+        int dir = static_cast<CCNode*>(sender)->getTag();
+        m_page = std::clamp(m_page + dir, 0, std::max(0, m_pages - 1));
+        queue(false);
     }
 
     void IveyMenu::sync(float) {

@@ -93,7 +93,7 @@ void main() {
         else col = mix(blue, blue, s);
         a = 0.30;
     }
-    else {
+    else if (u_mode < 6.5) {
         // Snow: flakes falling over a cold blue tint
         float snow = 0.0;
         float ratio = u_size.x / u_size.y;
@@ -111,6 +111,22 @@ void main() {
         snow = clamp(snow, 0.0, 1.0);
         col = mix(vec3(0.15, 0.25, 0.6), vec3(1.0), snow);
         a = 0.16 + 0.55 * snow;
+    }
+    else if (u_mode < 7.5) {
+        // Plasma (developer mode): old school colour waves
+        float v = sin(uv.x * 8.0 + u_time) + sin(uv.y * 7.0 - u_time * 1.3)
+                + sin((uv.x + uv.y) * 6.0 + u_time * 0.7) + sin(length(uv - vec2(0.5)) * 12.0 - u_time * 1.5);
+        col = 0.5 + 0.5 * vec3(sin(v * 1.2), sin(v * 1.2 + 2.1), sin(v * 1.2 + 4.2));
+        a = 0.32;
+    }
+    else {
+        // Rain (developer mode): green streaks falling in columns
+        float cx = floor(uv.x * 32.0);
+        float h = fract(sin(cx * 12.9898) * 43758.5453);
+        float y = fract(uv.y + u_time * (0.3 + 0.5 * h) + h * 7.0);
+        float streak = pow(1.0 - y, 6.0) * step(0.25, fract(h * 5.0 + 0.3));
+        col = vec3(0.1, 1.0, 0.4) * (0.3 + streak);
+        a = 0.08 + 0.55 * streak;
     }
 
     gl_FragColor = vec4(col, a * u_alpha);
@@ -140,7 +156,7 @@ void main() {
         if (m_prog) m_prog->release();
     }
 
-    int ThemeFx::count() { return 7; }
+    int ThemeFx::count(bool dev) { return dev ? 9 : 7; }
 
     char const* ThemeFx::name(int effect) {
         switch (effect) {
@@ -150,6 +166,8 @@ void main() {
             case 4: return "Frost";
             case 5: return "Pastel";
             case 6: return "Snow";
+            case 7: return "Plasma";
+            case 8: return "Rain";
             default: return "Off";
         }
     }
@@ -217,6 +235,13 @@ void main() {
             float t = wave(0.6f, 0.f);
             m_fallback->setStartColor({byte(0.36f + 0.6f * t), byte(0.81f - 0.15f * t), byte(0.98f - 0.26f * t)});
             m_fallback->setEndColor({byte(0.96f - 0.6f * t), byte(0.66f + 0.15f * t), byte(0.72f + 0.26f * t)});
+            m_fallback->setStartOpacity(op(80));
+            m_fallback->setEndOpacity(op(80));
+        }
+        else if (m_effect == 7 || m_effect == 8) { // developer effects
+            float t = wave(0.7f, 0.f);
+            m_fallback->setStartColor({byte(0.2f + 0.6f * t), byte(0.9f - 0.5f * t), byte(0.5f)});
+            m_fallback->setEndColor({byte(0.8f - 0.5f * t), byte(0.3f + 0.4f * t), byte(0.9f)});
             m_fallback->setStartOpacity(op(80));
             m_fallback->setEndOpacity(op(80));
         }
