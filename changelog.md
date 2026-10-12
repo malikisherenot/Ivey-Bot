@@ -1,5 +1,12 @@
 # Ivey Bot Changelog
 
+## v1.19.1
+
+- Built with the nightly Geode SDK (for the step size hook)
+- libx264 first again in the codec list
+- Audio tries the song file if the WAV fails
+- Developer mode shows how many hooks the mod has
+
 ## v1.19.0
 
 - TPS above 240 counts steps correctly with the time warp method
