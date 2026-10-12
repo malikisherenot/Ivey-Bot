@@ -371,13 +371,24 @@ namespace {
 
     // Looks for the step-size hook in the list of hooks of this mod. If it is installed but off, it is turned on.
     std::string inspectDeltaHook() {
+        auto& bot = Bot::get();
+        int total = 0, onThisClass = 0;
+        std::string state = "not installed";
+
         for (auto hook : Mod::get()->getHooks()) {
             if (!hook) continue;
-            if (hook->getDisplayName().find("getModifiedDelta") == std::string::npos) continue;
-            if (hook->isEnabled()) return "on";
-            return hook->enable().isOk() ? "was off, turned on" : "off";
+            ++total;
+            auto name = hook->getDisplayName();
+            if (name.find("GJBaseGameLayer") != std::string::npos) ++onThisClass;
+            if (name.find("getModifiedDelta") == std::string::npos) continue;
+            if (hook->isEnabled()) state = "on";
+            else state = hook->enable().isOk() ? "was off, turned on" : "off";
         }
-        return "not installed";
+
+        // So it can be seen at once if the whole class is missing or only this one function.
+        bot.hookInfo = fmt::format("hooks {}, GJBaseGameLayer {}", total, onThisClass);
+        log::info("Step size hook: {} ({})", state, bot.hookInfo);
+        return state;
     }
 
     // Small text overlay shown inside levels.
@@ -561,8 +572,8 @@ namespace {
                         if (bot.hookState == "not installed") bot.hookMissing = true;
                     }
                     if (cfg.devMode) {
-                        s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {}\n", m_moves, m_hook,
-                                         bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState);
+                        s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {} ({})\n", m_moves, m_hook,
+                                         bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState, bot.hookInfo);
                     }
                     if (activeTps() > 240.f && useWarp(activeTps())) {
                         s += "No step size hook on this device: using the time warp method\n";
