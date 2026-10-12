@@ -1,5 +1,9 @@
 # Ivey Bot Changelog
 
+## v1.19.2
+
+- mod.json asks for Geode 5.11.1 (needed for the nightly SDK build)
+
 ## v1.19.1
 
 - Built with the nightly Geode SDK (for the step size hook)

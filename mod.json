@@ -1,5 +1,5 @@
 {
-	"geode": "5.7.1",
+	"geode": "5.11.1",
 	"gd": {
 		"win": "2.2081",
 		"android": "2.2081",
@@ -8,7 +8,7 @@
 	},
 	"id": "itzmalikhere.malik",
 	"name": "Ivey Bot",
-	"version": "v1.19.1",
+	"version": "v1.19.2",
 	"developer": "itzmalikhere",
 	"description": "Frame-accurate macro bot.",
 	"tags": [
