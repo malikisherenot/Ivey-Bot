@@ -1,5 +1,15 @@
 # Ivey Bot Changelog
 
+## v1.19.0
+
+- TPS above 240 counts steps correctly with the time warp method
+- Menu pages when a tab has too many rows
+- In-level labels hidden while the menu is open
+- Hardware video encoders first, libx264 last
+- Audio errors name the codec
+- Developer mode (tap Version in Theme 7 times)
+- Dev effects Plasma and Rain, effect strength over buttons, more label info
+
 ## v1.18.1
 
 - TPS above 240 works without the step size hook (time warp method)
