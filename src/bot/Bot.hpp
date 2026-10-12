@@ -55,6 +55,8 @@ namespace ivey {
         bool lblAccuracy = true;
         int  accent = 0;
         int  opacity = 1;
+        bool devMode = false;        // experimental things and more info, turned on in the Theme tab
+        int  fxTopPct = 28;          // how strong the effect over the buttons is, in percent
         bool fxTop = true;           // the window effect also faintly covers the buttons
         int  fx = 0;                 // window effect: 0 off, 1 Aurora, 2 Rainbow, 3 Scanlines
 

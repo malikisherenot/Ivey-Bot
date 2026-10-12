@@ -69,8 +69,12 @@ namespace ivey {
         accent        = m->getSavedValue<int>("accent", 0);
         opacity       = m->getSavedValue<int>("opacity", 1);
         fx            = m->getSavedValue<int>("window-fx", 0);
-        if (fx < 0 || fx > 6) fx = 0;
+        if (fx < 0 || fx > 8) fx = 0;
         fxTop         = m->getSavedValue<bool>("window-fx-top", true);
+        devMode       = m->getSavedValue<bool>("dev-mode", false);
+        fxTopPct      = m->getSavedValue<int>("window-fx-top-pct", 28);
+        if (fxTopPct < 5 || fxTopPct > 100) fxTopPct = 28;
+        if (!devMode && fx > 6) fx = 0;
         if (tps < 1 || tps > 65535) tps = 240;
         if (corrInterval < 1 || corrInterval > 10000) corrInterval = 4;
         if (waveInterval < 1 || waveInterval > 10000) waveInterval = 1;
@@ -136,6 +140,8 @@ namespace ivey {
         m->setSavedValue("opacity", opacity);
         m->setSavedValue("window-fx", fx);
         m->setSavedValue("window-fx-top", fxTop);
+        m->setSavedValue("dev-mode", devMode);
+        m->setSavedValue("window-fx-top-pct", fxTopPct);
     }
 
     Bot& Bot::get() {
