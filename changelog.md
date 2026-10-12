@@ -1,5 +1,9 @@
 # Ivey Bot Changelog
 
+## v1.19.3
+
+- Built with Geode 5.4.1 like the XDBot fork (test for the step size hook)
+
 ## v1.19.2
 
 - mod.json asks for Geode 5.11.1 (needed for the nightly SDK build)
