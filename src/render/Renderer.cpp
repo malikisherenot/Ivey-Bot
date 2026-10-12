@@ -179,10 +179,21 @@ namespace ivey {
             }
 
             auto res = ffmpeg::events::AudioMixer::mixVideoAudio(video, audioFile, tmp);
+            std::string firstError = res.isErr() ? res.unwrapErr() : std::string();
+
+            // The FFmpeg API on a device may not read WAV files. The level's own song file is what
+            // the xdBot renderer gives it, so that is tried next (its start may then be a bit off).
+            if (res.isErr() && audioFile == wav) {
+                std::filesystem::remove(tmp, ec);
+                res = ffmpeg::events::AudioMixer::mixVideoAudio(video, song, tmp);
+                if (res.isOk() && std::abs(offset) > 0.05) {
+                    log::warn("Audio added from the song file, it may be {:.2f} seconds off", offset);
+                }
+            }
             std::filesystem::remove(wav, ec);
             if (res.isErr()) {
                 std::filesystem::remove(tmp, ec);
-                return res.unwrapErr();
+                return firstError.empty() ? res.unwrapErr() : firstError + " / " + res.unwrapErr();
             }
 
             std::filesystem::remove(video, ec);
@@ -203,8 +214,8 @@ namespace ivey {
 
     std::vector<std::string> Renderer::codecs() const {
         static char const* const preferred[] = {
-            "h264_mediacodec", "h264_videotoolbox", "h264_nvenc", "h264_amf", "h264_qsv",
-            "libopenh264", "libx264", "hevc_mediacodec", "hevc_videotoolbox", "hevc_nvenc", "libx265", "libvpx-vp9", "libaom-av1"
+            "libx264", "h264_nvenc", "h264_videotoolbox", "h264_mediacodec", "h264_amf", "h264_qsv",
+            "libopenh264", "libx265", "hevc_nvenc", "hevc_videotoolbox", "hevc_mediacodec", "libvpx-vp9", "libaom-av1"
         };
 
         auto all = ffmpeg::events::Recorder::getAvailableCodecs();
