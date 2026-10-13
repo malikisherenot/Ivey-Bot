@@ -300,27 +300,59 @@ namespace {
         }
     }
 
-    // Sets the time warp for the steps made while it lives, and puts the old value back.
+    // The last value a guard set, and what it replaced. If a guard could not put the value back, the
+    // next one must not take the leftover as the real time warp, or it would shrink every step.
+    double g_warpLastSet = 0.0;
+    double g_warpLastSaved = 1.0;
+
+    // Sets the time warp for the steps made while it lives, and puts the old value back
+    // (together with the time scale of the scheduler, in case the game links the two).
     struct WarpGuard {
         GJBaseGameLayer* layer;
         double saved = 1.0;
         double set = 1.0;
+        float savedScale = 1.f;
         bool on = false;
 
         WarpGuard(GJBaseGameLayer* gl, bool enable, float tps) : layer(gl) {
             if (!enable || !gl) return;
-            saved = static_cast<double>(gl->m_gameState.m_timeWarp);
+
+            double current = static_cast<double>(gl->m_gameState.m_timeWarp);
+            saved = (g_warpLastSet != 0.0 && current == g_warpLastSet) ? g_warpLastSaved : current;
+
             gl->m_gameState.m_timeWarp = static_cast<decltype(gl->m_gameState.m_timeWarp)>(saved * (240.0 / static_cast<double>(tps)));
             set = static_cast<double>(gl->m_gameState.m_timeWarp);
+            savedScale = CCDirector::get()->getScheduler()->getTimeScale();
+
+            g_warpLastSet = set;
+            g_warpLastSaved = saved;
             on = true;
         }
 
         void restore() {
             if (!on) return;
+            static int reports = 0; // the Geode log should not fill up with the same thing
+            bool logIt = Bot::get().cfg.tpsLog && reports < 40;
+
             // a time warp trigger that fired during the step has set its own value, which stays
             if (static_cast<double>(layer->m_gameState.m_timeWarp) == set) {
                 layer->m_gameState.m_timeWarp = static_cast<decltype(layer->m_gameState.m_timeWarp)>(saved);
+                auto scheduler = CCDirector::get()->getScheduler();
+                if (scheduler->getTimeScale() != savedScale) {
+                    if (logIt) {
+                        ++reports;
+                        log::info("[TPS] the scheduler time scale was {:.4f} after a step, put back to {:.4f}",
+                                  static_cast<double>(scheduler->getTimeScale()), static_cast<double>(savedScale));
+                    }
+                    scheduler->setTimeScale(savedScale);
+                }
             }
+            else if (logIt) {
+                ++reports;
+                log::info("[TPS] the game changed the time warp during a step: set {:.4f}, now {:.4f}, it was {:.4f}",
+                          set, static_cast<double>(layer->m_gameState.m_timeWarp), saved);
+            }
+            g_warpLastSet = 0.0;
             on = false;
         }
 
@@ -391,6 +423,81 @@ namespace {
         return state;
     }
 
+
+    // Everything below writes to the Geode log when "Log TPS To Geode Log" is on (developer mode).
+    // The lines start with [TPS] so they are easy to find and to send along with a report.
+    void tpsLogIntro() {
+        auto& bot = Bot::get();
+        log::info("[TPS] ---- start ----");
+        log::info("[TPS] Geode {} GD {} on {}", Loader::get()->getVersion().toVString(), GEODE_GD_VERSION_STRING, GEODE_PLATFORM_NAME);
+        log::info("[TPS] tps {} frame accurate {} method {} classic {} budget {} ms", bot.cfg.tps, bot.cfg.frameAccurate,
+                  bot.cfg.tpsMethod, bot.cfg.tpsClassic, bot.cfg.stepBudget);
+
+        // every hook of this mod, so it can be seen which ones exist and which do not
+        int total = 0;
+        for (auto hook : Mod::get()->getHooks()) {
+            if (!hook) continue;
+            ++total;
+            log::info("[TPS] hook {} {}", hook->getDisplayName(), hook->isEnabled() ? "on" : "off");
+        }
+        log::info("[TPS] {} hooks, step size hook: {}", total, inspectDeltaHook());
+    }
+
+    // Called every frame inside a level. Writes one line per second.
+    void tpsLogTick() {
+        static bool introDone = false;
+        static auto last = std::chrono::steady_clock::now();
+        static unsigned long long lastCalls = 0, lastMoves = 0, lastHook = 0;
+        static double lastLevel = 0.0;
+        static int lastProgress = 0;
+
+        auto& bot = Bot::get();
+        auto pl = PlayLayer::get();
+        if (!bot.cfg.tpsLog || !pl) {
+            introDone = false;
+            return;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (!introDone) {
+            introDone = true;
+            tpsLogIntro();
+            last = now;
+            lastCalls = bot.stepCalls;
+            lastMoves = bot.stepMoves;
+            lastHook = bot.hookCalls;
+            lastLevel = pl->m_gameState.m_levelTime;
+            lastProgress = pl->m_gameState.m_currentProgress;
+            return;
+        }
+
+        double secs = std::chrono::duration<double>(now - last).count();
+        if (secs < 1.0) return;
+
+        double level = pl->m_gameState.m_levelTime;
+        int progress = pl->m_gameState.m_currentProgress;
+        double dCalls = static_cast<double>(bot.stepCalls - lastCalls);
+        double dLevel = level - lastLevel;
+        float tps = activeTps();
+
+        log::info("[TPS] tps {} method {} loop {} warp {} | steps/s {:.0f} moves/s {:.0f} hook/s {:.0f} | level s per s {:.3f} progress/s {:.0f} steps per level s {:.1f} | "
+                  "time warp {:.4f} scale {:.4f} | level time {:.3f} frame {} step {:.0f} | player x {:.1f}",
+                  tps, bot.cfg.tpsMethod, bot.cfg.tpsClassic ? "classic" : "measured", useWarp(tps) ? "on" : "off",
+                  dCalls / secs, static_cast<double>(bot.stepMoves - lastMoves) / secs, static_cast<double>(bot.hookCalls - lastHook) / secs,
+                  dLevel / secs, static_cast<double>(progress - lastProgress) / secs, dLevel > 1e-9 ? dCalls / dLevel : 0.0,
+                  static_cast<double>(pl->m_gameState.m_timeWarp),
+                  static_cast<double>(CCDirector::get()->getScheduler()->getTimeScale()),
+                  level, frameOf(pl), ivey::Trajectory::get().delta > 1e-9f ? 60.0 / ivey::Trajectory::get().delta : 0.0,
+                  pl->m_player1 ? pl->m_player1->getPositionX() : 0.f);
+
+        last = now;
+        lastCalls = bot.stepCalls;
+        lastMoves = bot.stepMoves;
+        lastHook = bot.hookCalls;
+        lastLevel = level;
+        lastProgress = progress;
+    }
+
     // Small text overlay shown inside levels.
     class Overlay : public CCNode {
         CCLabelBMFont* m_label = nullptr;
@@ -404,6 +511,7 @@ namespace {
         unsigned long long m_lastMoves = 0, m_lastHook = 0;
         float m_moves = 0.f, m_hook = 0.f; // steps that moved the clock, and runs of the step-size hook, per second
         float m_speed = 100.f;      // game seconds per real second, in percent
+        float m_clock = 0.f;        // steps made per second of level time (240 with the time warp method, the TPS with the hook)
         CCMenu* m_renderMenu = nullptr;
 
     public:
@@ -538,6 +646,11 @@ namespace {
                     m_running = progress >= m_lastProgress ? static_cast<float>((progress - m_lastProgress) / secs) : 0.f;
                     double level = pl->m_gameState.m_levelTime;
                     m_speed = level >= m_lastLevel ? static_cast<float>((level - m_lastLevel) / secs * 100.0) : 0.f;
+                    {
+                        double dLevel = level - m_lastLevel;
+                        double dCalls = bot.stepCalls >= m_lastCalls ? static_cast<double>(bot.stepCalls - m_lastCalls) : 0.0;
+                        m_clock = (dLevel > 1e-9 && dCalls > 0.0) ? static_cast<float>(dCalls / dLevel) : 0.f;
+                    }
                     m_lastLevel = level;
                     m_calls = bot.stepCalls >= m_lastCalls ? static_cast<float>((bot.stepCalls - m_lastCalls) / secs) : 0.f;
                     m_lastCalls = bot.stepCalls;
@@ -598,6 +711,9 @@ namespace {
                 s += fmt::format("Dev: time {:.3f}  progress {}  method {}  hook missing {}  steps {}\n",
                                  pl->m_gameState.m_levelTime, pl->m_gameState.m_currentProgress, cfg.tpsMethod,
                                  bot.hookMissing ? "yes" : "no", bot.stepCalls);
+                s += fmt::format("Dev: time warp {:.3f}  time scale {:.3f}  steps per level second {:.0f}\n",
+                                 static_cast<double>(pl->m_gameState.m_timeWarp),
+                                 static_cast<double>(CCDirector::get()->getScheduler()->getTimeScale()), m_clock);
             }
             if (cfg.autoSafe && bot.safeMode) s += "Safe Mode\n";
             if (cfg.stepper) s += fmt::format("Stepper: {} queued\n", bot.stepsPending);
@@ -673,6 +789,8 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         auto& bot = Bot::get();
 
         if (inPlay(this) && PlayLayer::get()) {
+            tpsLogTick();
+
             if (bot.cfg.instantRespawn && m_player1->m_isDead) {
                 PlayLayer::get()->resetLevel();
                 return;
@@ -826,6 +944,14 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         bot.tpsHonored = bot.stepAdvance <= 0.0 || std::abs(bot.stepAdvance - static_cast<double>(newDt)) < static_cast<double>(newDt) * 0.25;
         bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) - consumed, -0.05, 1.0));
         if (paused) bot.leftOver = 0.f; // no time is saved up while paused
+
+        // The first frames after a change are written one by one, to see how the loop starts.
+        if (bot.cfg.tpsLog && bot.logFrames > 0) {
+            --bot.logFrames;
+            log::info("[TPS] frame dt {:.5f} realDt {:.5f} calls {} callsTime {:.5f} level advance {:.5f} unit {:.6f} leftOver {:.5f} paused {} warp {} time warp {:.4f}",
+                      static_cast<double>(dt), static_cast<double>(realDt), done, callsTime, m_gameState.m_levelTime - levelStart, unit,
+                      static_cast<double>(bot.leftOver), paused, warping ? "on" : "off", static_cast<double>(m_gameState.m_timeWarp));
+        }
 
         // The trajectory runs once per screen frame, outside the step budget.
         if (auto pl = PlayLayer::get()) {
