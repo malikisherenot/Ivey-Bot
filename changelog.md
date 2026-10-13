@@ -1,5 +1,9 @@
 # Ivey Bot Changelog
 
+## v1.19.5
+
+- Built with Geode 5.11.1, the newest, to test the step size hook
+
 ## v1.19.4
 
 - TPS loop can no longer lock up and freeze the player
