@@ -72,6 +72,7 @@ namespace ivey {
         if (fx < 0 || fx > 8) fx = 0;
         fxTop         = m->getSavedValue<bool>("window-fx-top", true);
         devMode       = m->getSavedValue<bool>("dev-mode", false);
+        tpsLog        = devMode && m->getSavedValue<bool>("tps-log", false);
         fxTopPct      = m->getSavedValue<int>("window-fx-top-pct", 28);
         if (fxTopPct < 5 || fxTopPct > 100) fxTopPct = 28;
         if (!devMode && fx > 6) fx = 0;
@@ -141,6 +142,7 @@ namespace ivey {
         m->setSavedValue("window-fx", fx);
         m->setSavedValue("window-fx-top", fxTop);
         m->setSavedValue("dev-mode", devMode);
+        m->setSavedValue("tps-log", tpsLog);
         m->setSavedValue("window-fx-top-pct", fxTopPct);
     }
 

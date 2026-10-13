@@ -55,6 +55,7 @@ namespace ivey {
         bool lblAccuracy = true;
         int  accent = 0;
         int  opacity = 1;
+        bool tpsLog = false;         // developer mode: writes what the TPS code does to the Geode log
         bool devMode = false;        // experimental things and more info, turned on in the Theme tab
         int  fxTopPct = 28;          // how strong the effect over the buttons is, in percent
         bool fxTop = true;           // the window effect also faintly covers the buttons
@@ -82,6 +83,7 @@ namespace ivey {
         bool editorAlign = false;    // the next editor step finds out where in the macro the player starts
         bool editorWasDead = false;  // editor playtest: for noticing a restart
         double editorLastTime = 0.0;
+        int  logFrames = 0;
         int  preventSkip = 0;        // steps where Prevent Death stays quiet after the stepper was turned off
         bool safeMode = false;
         int stepsPending = 0;
@@ -103,6 +105,7 @@ namespace ivey {
         void resetStepping() {
             leftOver = 0.f;
             stepAdvance = 0.0;
+            logFrames = 30; // the next frames are written to the log one by one
         }
 
         Config cfg;
