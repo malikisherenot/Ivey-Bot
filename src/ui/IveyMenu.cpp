@@ -216,6 +216,10 @@ namespace ivey {
                             default: return std::string(bot.hookMissing ? "auto (time warp)" : "auto");
                         }
                     });
+                    if (c.devMode) {
+                        check("Log TPS To Geode Log", c.tpsLog, nullptr,
+                              [] { return std::string(Bot::get().cfg.tpsLog ? "writing" : "off"); });
+                    }
                     check("Classic TPS Loop", c.tpsClassic, nullptr,
                           [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
                     check("Position Correction", c.correction, nullptr,
@@ -382,6 +386,7 @@ namespace ivey {
                             taps = 0;
                             bot.cfg.devMode = !bot.cfg.devMode;
                             if (!bot.cfg.devMode && bot.cfg.fx > 6) bot.cfg.fx = 0;
+                            if (!bot.cfg.devMode) bot.cfg.tpsLog = false;
                             bot.cfg.save();
                             bot.status = bot.cfg.devMode ? "Developer mode on" : "Developer mode off";
                         }
