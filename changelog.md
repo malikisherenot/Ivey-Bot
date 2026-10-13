@@ -1,5 +1,10 @@
 # Ivey Bot Changelog
 
+## v1.19.4
+
+- TPS loop can no longer lock up and freeze the player
+- Overlay numbers measured fresh after the menu closes
+
 ## v1.19.3
 
 - Built with Geode 5.4.1 like the XDBot fork (test for the step size hook)
