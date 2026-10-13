@@ -508,7 +508,18 @@ namespace {
             // The labels would show through the half see-through menu, so they wait until it is closed.
             bool menuOpen = ivey::IveyMenu::get() != nullptr;
             this->setVisible(!menuOpen);
-            if (menuOpen) return;
+            if (menuOpen) {
+                // so the numbers are measured over the time after it closes, not over the time it was open
+                m_lastTime = std::chrono::steady_clock::now();
+                if (pl) {
+                    m_lastProgress = pl->m_gameState.m_currentProgress;
+                    m_lastLevel = pl->m_gameState.m_levelTime;
+                }
+                m_lastCalls = bot.stepCalls;
+                m_lastMoves = bot.stepMoves;
+                m_lastHook = bot.hookCalls;
+                return;
+            }
 
             auto& render = ivey::Renderer::get();
             m_renderMenu->setVisible(pl && render.active());
@@ -740,7 +751,12 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // keeps the game at normal speed instead of running fast.
         // With the time warp method the level clock does not show the step size, so the steps are counted.
         bool warping = useWarp(tps);
-        double unit = (!warping && bot.stepAdvance > 0.0) ? bot.stepAdvance : static_cast<double>(newDt);
+        double expected = static_cast<double>(newDt);
+        double unit = (!warping && bot.stepAdvance > 0.0) ? bot.stepAdvance : expected;
+        // A learned step size that is far off would make the loop do no steps at all, and with no steps
+        // it could never learn again. So it is kept near 1 / TPS and always small enough for one step.
+        unit = std::clamp(unit, expected * 0.25, expected * 8.0);
+        unit = std::min(unit, static_cast<double>(realDt) * 0.999);
         double levelStart = m_gameState.m_levelTime;
         double callsTime = 0.0; // time the calls would take if each one moved exactly 1 / TPS
 
@@ -798,8 +814,11 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             bot.stepAdvance = static_cast<double>(newDt);
         }
         else if (done > 0 && simulated > 1e-9) {
-            double perCall = simulated / static_cast<double>(done);
+            double perCall = std::clamp(simulated / static_cast<double>(done), expected * 0.25, expected * 8.0);
             bot.stepAdvance = bot.stepAdvance > 0.0 ? bot.stepAdvance * 0.8 + perCall * 0.2 : perCall;
+        }
+        else if (done == 0 && !paused && static_cast<double>(realDt) >= expected * 1.5) {
+            bot.stepAdvance = 0.0; // a whole frame without a step although there was time for several: learn again
         }
         // Nothing moved (paused, dead, finished): the time still counts as used.
         double consumed = simulated > 1e-9 ? simulated : callsTime;
