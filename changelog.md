@@ -1,5 +1,18 @@
 # Ivey Bot Changelog
 
+## v1.19.8
+
+- Overlay and log name other mods that hook the step function (they can change TPS)
+
+## v1.19.7
+
+- Developer mode: Log TPS To Geode Log (Bot tab), writes [TPS] lines every second
+
+## v1.19.6
+
+- Time warp method puts the scheduler time scale back too, and cannot shrink step by step
+- Developer mode shows time warp, time scale and steps per level second
+
 ## v1.19.5
 
 - Built with Geode 5.11.1, the newest, to test the step size hook
