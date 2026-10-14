@@ -424,6 +424,27 @@ namespace {
     }
 
 
+    // Other enabled mods that hook the game's step function. Mods like that can change the step size
+    // or the time that is passed to it, which is the one thing the TPS code depends on.
+    std::string otherTimingMods() {
+        std::string out;
+        int count = 0;
+        for (auto mod : Loader::get()->getAllMods()) {
+            if (!mod || mod == Mod::get() || !mod->isEnabled()) continue;
+            for (auto hook : mod->getHooks()) {
+                if (!hook || !hook->isEnabled()) continue;
+                auto name = hook->getDisplayName();
+                if (name == "GJBaseGameLayer::update" || name == "GJBaseGameLayer::getModifiedDelta") {
+                    if (count > 0) out += ", ";
+                    out += mod->getName();
+                    ++count;
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     // Everything below writes to the Geode log when "Log TPS To Geode Log" is on (developer mode).
     // The lines start with [TPS] so they are easy to find and to send along with a report.
     void tpsLogIntro() {
@@ -432,6 +453,7 @@ namespace {
         log::info("[TPS] Geode {} GD {} on {}", Loader::get()->getVersion().toVString(), GEODE_GD_VERSION_STRING, GEODE_PLATFORM_NAME);
         log::info("[TPS] tps {} frame accurate {} method {} classic {} budget {} ms", bot.cfg.tps, bot.cfg.frameAccurate,
                   bot.cfg.tpsMethod, bot.cfg.tpsClassic, bot.cfg.stepBudget);
+        log::info("[TPS] other mods that hook the step function: {}", otherTimingMods());
 
         // every hook of this mod, so it can be seen which ones exist and which do not
         int total = 0;
@@ -511,6 +533,7 @@ namespace {
         unsigned long long m_lastMoves = 0, m_lastHook = 0;
         float m_moves = 0.f, m_hook = 0.f; // steps that moved the clock, and runs of the step-size hook, per second
         float m_speed = 100.f;      // game seconds per real second, in percent
+        bool m_modsScanned = false;
         float m_clock = 0.f;        // steps made per second of level time (240 with the time warp method, the TPS with the hook)
         CCMenu* m_renderMenu = nullptr;
 
@@ -698,6 +721,14 @@ namespace {
                     if (cfg.devMode) {
                         s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {} ({})\n", m_moves, m_hook,
                                          bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState, bot.hookInfo);
+                    }
+                    if (!m_modsScanned) {
+                        m_modsScanned = true;
+                        bot.otherMods = otherTimingMods();
+                    }
+                    if (!bot.otherMods.empty()) {
+                        std::string list = bot.otherMods.size() > 64 ? bot.otherMods.substr(0, 61) + "..." : bot.otherMods;
+                        s += "Other mods hook the step function: " + list + "\n";
                     }
                     if (activeTps() > 240.f && useWarp(activeTps())) {
                         s += "No step size hook on this device: using the time warp method\n";
