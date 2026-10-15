@@ -1,8 +1,15 @@
 # Ivey Bot Changelog
 
+## v1.19.9
+
+- Fix build: Geode 5.11.1 has no Mod::isEnabled
+- Light Steps (test): skips the visual update on every step of a frame except the last, for heavy levels at high TPS
+- Log TPS: new "cost" line (frames/s, ms per step, postUpdate time, budget cuts)
+
 ## v1.19.8
 
 - Overlay and log name other mods that hook the step function (they can change TPS)
+- README: note about other mods that change TPS
 
 ## v1.19.7
 
