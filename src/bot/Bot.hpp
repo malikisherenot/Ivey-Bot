@@ -40,6 +40,7 @@ namespace ivey {
         int  waveInterval = 1;
         int  tpsMethod = 0;          // above 240 TPS: 0 auto, 1 step size hook, 2 time warp
         bool tpsClassic = false;     // step loop copied from xdBot, for comparing
+        bool lightSteps = false;     // test: skip PlayLayer::postUpdate on every step of a frame except the last
         int  stepBudget = 33; // ms of stepping allowed per screen frame
         int  tps = 240;
         bool speedhack = false;
@@ -100,6 +101,9 @@ namespace ivey {
         std::string hookInfo;
         std::string otherMods;            // other enabled mods that hook the game's step function             // how many hooks the mod has, for developer mode            // is the step-size hook installed and on (checked once)
         unsigned long long stepCalls = 0; // physics steps made so far (for the Steps/s readout)
+        bool skipPost = false;            // true while the TPS loop is on a step that is not the last one of the frame
+        double stepNs = 0.0, postNs = 0.0; // time spent in the game's step and in PlayLayer::postUpdate (TPS log)
+        unsigned long long postCalls = 0, postSkipped = 0, budgetHits = 0, loopFrames = 0;
         double stepAdvance = 0.0; // level time one step really advances (measured)
         bool tpsHonored = true;   // false if the game ignores the step size it is given
 
