@@ -430,7 +430,7 @@ namespace {
         std::string out;
         int count = 0;
         for (auto mod : Loader::get()->getAllMods()) {
-            if (!mod || mod == Mod::get() || !mod->isEnabled()) continue;
+            if (!mod || mod == Mod::get()) continue;
             for (auto hook : mod->getHooks()) {
                 if (!hook || !hook->isEnabled()) continue;
                 auto name = hook->getDisplayName();
