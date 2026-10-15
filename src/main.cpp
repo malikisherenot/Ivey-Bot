@@ -472,6 +472,8 @@ namespace {
         static unsigned long long lastCalls = 0, lastMoves = 0, lastHook = 0;
         static double lastLevel = 0.0;
         static int lastProgress = 0;
+        static double lastStepNs = 0.0, lastPostNs = 0.0;
+        static unsigned long long lastPost = 0, lastSkipped = 0, lastBudget = 0, lastFrames = 0;
 
         auto& bot = Bot::get();
         auto pl = PlayLayer::get();
@@ -490,6 +492,8 @@ namespace {
             lastHook = bot.hookCalls;
             lastLevel = pl->m_gameState.m_levelTime;
             lastProgress = pl->m_gameState.m_currentProgress;
+            lastStepNs = bot.stepNs; lastPostNs = bot.postNs;
+            lastPost = bot.postCalls; lastSkipped = bot.postSkipped; lastBudget = bot.budgetHits; lastFrames = bot.loopFrames;
             return;
         }
 
@@ -511,6 +515,20 @@ namespace {
                   static_cast<double>(CCDirector::get()->getScheduler()->getTimeScale()),
                   level, frameOf(pl), ivey::Trajectory::get().delta > 1e-9f ? 60.0 / ivey::Trajectory::get().delta : 0.0,
                   pl->m_player1 ? pl->m_player1->getPositionX() : 0.f);
+
+        // Where the time goes: ms/step is the whole game step, post is the visual part inside it.
+        double dStepNs = bot.stepNs - lastStepNs;
+        log::info("[TPS] cost | frames/s {:.0f} | ms/step {:.4f} | step ms/s {:.0f} | postUpdate ms/s {:.0f} (calls/s {:.0f}, skipped/s {:.0f}) | budget cuts/s {:.1f} | light steps {}",
+                  static_cast<double>(bot.loopFrames - lastFrames) / secs,
+                  dCalls > 0.0 ? dStepNs / 1.0e6 / dCalls : 0.0,
+                  dStepNs / 1.0e6 / secs,
+                  (bot.postNs - lastPostNs) / 1.0e6 / secs,
+                  static_cast<double>(bot.postCalls - lastPost) / secs,
+                  static_cast<double>(bot.postSkipped - lastSkipped) / secs,
+                  static_cast<double>(bot.budgetHits - lastBudget) / secs,
+                  bot.cfg.lightSteps ? "on" : "off");
+        lastStepNs = bot.stepNs; lastPostNs = bot.postNs;
+        lastPost = bot.postCalls; lastSkipped = bot.postSkipped; lastBudget = bot.budgetHits; lastFrames = bot.loopFrames;
 
         last = now;
         lastCalls = bot.stepCalls;
@@ -939,7 +957,21 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             }
 
             double beforeCall = m_gameState.m_levelTime;
+
+            // Light steps (test): the screen only needs to be redrawn after the last step of a frame, so the
+            // visual part (PlayLayer::postUpdate) is skipped on the steps before it.
+            if (bot.cfg.lightSteps) {
+                double nextSim = simulatedNow + (warping ? static_cast<double>(newDt) : unit);
+                bool lastStep = nextSim + unit * 0.999 > static_cast<double>(realDt) ||
+                                callsTime + 2.0 * static_cast<double>(newDt) * 0.999 > static_cast<double>(realDt) ||
+                                done + 1 >= stopAfter;
+                bot.skipPost = !lastStep && (std::chrono::high_resolution_clock::now() - startTime) < budget * 0.9;
+            }
+
+            auto callStart = std::chrono::high_resolution_clock::now();
             GJBaseGameLayer::update(newDt);
+            auto callEnd = std::chrono::high_resolution_clock::now();
+            bot.stepNs += std::chrono::duration<double, std::nano>(callEnd - callStart).count();
             ++done;
             ++bot.stepCalls;
             if (m_gameState.m_levelTime - beforeCall > 1e-9) ++bot.stepMoves;
@@ -947,9 +979,14 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             if (bot.preventSkip > 0) --bot.preventSkip; // just left the stepper, let the player act
             if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
 
-            if (std::chrono::high_resolution_clock::now() - startTime > budget) break;
+            if (callEnd - startTime > budget) {
+                ++bot.budgetHits;
+                break;
+            }
         }
         bot.stepping = false;
+        bot.skipPost = false;
+        ++bot.loopFrames;
         warp.restore();
 
         // No sign of the step-size hook after a number of steps above 240 TPS: it is not installed here.
@@ -1122,6 +1159,19 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 };
 
 class $modify(IveyPlayLayer, PlayLayer) {
+    void postUpdate(float dt) {
+        auto& bot = Bot::get();
+        if (bot.skipPost) {
+            ++bot.postSkipped;
+            return;
+        }
+        if (!bot.cfg.tpsLog) return PlayLayer::postUpdate(dt);
+        auto begin = std::chrono::steady_clock::now();
+        PlayLayer::postUpdate(dt);
+        bot.postNs += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - begin).count();
+        ++bot.postCalls;
+    }
+
     void setupHasCompleted() {
         PlayLayer::setupHasCompleted();
         Bot::get().onEnter(this);
