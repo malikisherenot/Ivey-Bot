@@ -220,6 +220,8 @@ namespace ivey {
                         check("Log TPS To Geode Log", c.tpsLog, nullptr,
                               [] { return std::string(Bot::get().cfg.tpsLog ? "writing" : "off"); });
                     }
+                    check("Light Steps (test)", c.lightSteps, nullptr,
+                          [] { return std::string(Bot::get().cfg.lightSteps ? "visuals once per frame" : "off"); });
                     check("Classic TPS Loop", c.tpsClassic, nullptr,
                           [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
                     check("Position Correction", c.correction, nullptr,
