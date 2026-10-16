@@ -420,6 +420,16 @@ namespace ivey {
                                  Bot::get().status = fmt::format("Prevent Death looks {} frames ahead", cfg.preventFrames);
                              });
 
+                    check("Auto Click", c.autoClick, nullptr,
+                          [] { return fmt::format("{}f", Bot::get().cfg.autoFrames); });
+                    editable("Auto Click Look Ahead", [] { return std::to_string(Bot::get().cfg.autoFrames); }, 4, 120,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.autoFrames = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Auto Click looks {} frames ahead", cfg.autoFrames);
+                             });
+
                     check("Show Hitboxes", c.hitboxes);
                     check("Hitbox Trail", c.hitboxTrail);
                     break;
@@ -619,7 +629,7 @@ namespace ivey {
         auto local = m_root->convertToNodeSpace(touch->getLocation());
         if (!CCRect(0.f, 0.f, W, H).containsPoint(local)) return false;
 
-        // A side (or the bottom right corner) resizes the window, the title bar moves it.
+        // A side (or the bottom right corner) resizes the window, anywhere else on it moves it.
         constexpr float EDGE = 9.f;
         m_drag = 0;
         m_sides = 0;
@@ -629,7 +639,7 @@ namespace ivey {
         else {
             if (local.x < EDGE) m_sides |= 1;
             if (local.x > W - EDGE) m_sides |= 2;
-            if (local.y > H - 5.f) m_sides |= 4;
+            if (local.y > H - 3.f) m_sides |= 4;
             if (local.y < EDGE) m_sides |= 8;
         }
 
@@ -640,8 +650,8 @@ namespace ivey {
             m_rootFrom = m_root->getPosition();
             showEdges();
         }
-        else if (local.y > H - TITLE_H) {
-            m_drag = 1; // title bar moves the window
+        else {
+            m_drag = 1; // drag from anywhere that is not a button: title, gaps, footer
         }
         return true;
     }
