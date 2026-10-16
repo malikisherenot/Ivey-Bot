@@ -24,6 +24,8 @@ namespace ivey {
         bool trajectoryRelease = true;
         bool preventDeath = false;   // pauses before a death
         int  preventFrames = 3;      // how many steps ahead it looks
+        bool autoClick = false;      // clicks by itself: tries hold and release on a copy of the player, keeps the one that lives
+        int  autoFrames = 24;        // how many steps ahead Auto Click looks
         bool hitboxes = false;
         bool hitboxTrail = false;
         bool swift = false;

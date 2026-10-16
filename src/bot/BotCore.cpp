@@ -35,6 +35,8 @@ namespace ivey {
         trajectoryRelease = m->getSavedValue<bool>("trajectory-release", true);
         preventDeath  = m->getSavedValue<bool>("prevent-death", false);
         preventFrames = m->getSavedValue<int>("prevent-frames", 3);
+        autoClick     = m->getSavedValue<bool>("auto-click", false);
+        autoFrames    = m->getSavedValue<int>("auto-frames", 24);
         hitboxes      = m->getSavedValue<bool>("hitboxes", false);
         hitboxTrail   = m->getSavedValue<bool>("hitbox-trail", false);
         swift         = m->getSavedValue<bool>("swift", false);
@@ -81,6 +83,7 @@ namespace ivey {
         if (corrInterval < 1 || corrInterval > 10000) corrInterval = 4;
         if (trajectoryLength < 2 || trajectoryLength > 2000) trajectoryLength = 500;
         if (preventFrames < 1 || preventFrames > 30) preventFrames = 3;
+        if (autoFrames < 4 || autoFrames > 120) autoFrames = 24;
         if (swiftClicks < 1 || swiftClicks > 100) swiftClicks = 2;
         if (renderWidth < 16 || renderWidth > 16384) renderWidth = 1920;
         if (renderHeight < 16 || renderHeight > 16384) renderHeight = 1080;
@@ -108,6 +111,8 @@ namespace ivey {
         m->setSavedValue("trajectory-release", trajectoryRelease);
         m->setSavedValue("prevent-death", preventDeath);
         m->setSavedValue("prevent-frames", preventFrames);
+        m->setSavedValue("auto-click", autoClick);
+        m->setSavedValue("auto-frames", autoFrames);
         m->setSavedValue("hitboxes", hitboxes);
         m->setSavedValue("hitbox-trail", hitboxTrail);
         m->setSavedValue("swift", swift);
@@ -279,21 +284,26 @@ namespace ivey {
             PlayerObject* pl = c.player == 0 ? gl->m_player1 : gl->m_player2;
             if (!pl) continue;
 
+            // Checks from other bots (no vertical speed recorded) were taken at another moment of the frame,
+            // so they are only a rough guide: a wider margin, and the rotation is not touched at all.
+            // Forcing it on every frame is what stopped the cube flip and the portal and orb effects.
+            bool own = c.vel;
+
             float dx = pl->getPositionX() - c.x;
             float dy = pl->getPositionY() - c.y;
             // Tiny float noise is left alone, real drift is pulled back.
-            bool posOff = dx * dx + dy * dy >= 0.0025f;
-            bool velOff = c.vel && std::abs(static_cast<float>(pl->m_yVelocity) - c.yVel) > 0.25f;
+            float posLimit = own ? 0.0025f : 1.0f;
+            bool posOff = dx * dx + dy * dy >= posLimit;
+            bool velOff = own && std::abs(static_cast<float>(pl->m_yVelocity) - c.yVel) > 0.25f;
 
-            // The rotation is what shows orbs, portals and pads on the player. It is only visual,
-            // so it is put back on its own as soon as it looks wrong.
-            bool rotOff = c.hasRot && std::abs(normalizeAngle(pl->getRotation() - c.rot)) > 1.5f;
+            // Our own macros also keep the rotation, as the sign that an orb, portal or pad was missed.
+            bool rotOff = own && c.hasRot && std::abs(normalizeAngle(pl->getRotation() - c.rot)) > 1.5f;
             if (rotOff) {
                 pl->setRotation(c.rot);
                 if (!posOff && !velOff) ++fixes;
             }
             if (!posOff && !velOff) continue;
-            if (c.hasRot) pl->setRotation(c.rot);
+            if (own && c.hasRot) pl->setRotation(c.rot);
 
             // Position and vertical speed go back together, otherwise the player
             // drifts away again on the very next frames.

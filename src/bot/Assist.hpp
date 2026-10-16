@@ -11,6 +11,11 @@ namespace ivey {
         // `who` gets the player (0 or 1).
         int deathIn(PlayLayer* pl, int frames, int* who);
 
+        // Auto Click: for each player, tries keeping the button as it is and changing it on a copy of the player.
+        // If keeping it leads to a death and changing it lives longer, the button is changed on the real player.
+        // Returns true if it pressed or released something.
+        bool autoClick(PlayLayer* pl, int frames);
+
         // Draws the hitboxes of everything near the screen. Called once per screen frame.
         void drawHitboxes(PlayLayer* pl);
 

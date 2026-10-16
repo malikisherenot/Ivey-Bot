@@ -6,16 +6,19 @@
 #include <Geode/modify/PlayLayer.hpp>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 using namespace geode::prelude;
 
 namespace ivey::Assist {
     namespace {
-        Ref<CCDrawNode> s_node;
+        Ref<CCNode> s_node;        // holds the pieces of the trail
+        CCDrawNode* s_head = nullptr; // the piece that is being drawn into
         PlayLayer* s_owner = nullptr;
         int s_count = 0;
-        constexpr int TRAIL_LIMIT = 2500; // rectangles kept before the trail starts over
+        constexpr int TRAIL_PIECE = 300;  // rectangles in one piece of the trail
+        constexpr int TRAIL_PIECES = 8;   // pieces kept: the oldest one goes when a new one starts, so the trail rolls on
 
         Ref<CCDrawNode> s_boxes; // hitboxes of the level
         PlayLayer* s_boxesOwner = nullptr;
@@ -32,11 +35,16 @@ namespace ivey::Assist {
             polygon(node, v, 4, fill, width, line);
         }
 
+        void resetTrail() {
+            if (s_node) s_node->removeAllChildrenWithCleanup(true);
+            s_head = nullptr;
+            s_count = 0;
+        }
+
         void hide() {
             if (s_node && s_node->isVisible()) {
-                s_node->clear();
+                resetTrail();
                 s_node->setVisible(false);
-                s_count = 0;
             }
         }
     }
@@ -58,6 +66,34 @@ namespace ivey::Assist {
             if (path.died) return true;
         }
         return false;
+    }
+
+    bool autoClick(PlayLayer* pl, int frames) {
+        auto& t = Trajectory::get();
+        if (!pl || frames <= 0 || t.creating()) return false;
+        if (!pl->m_player1 || pl->m_player1->m_isDead || !pl->m_levelSettings) return false;
+        if (pl->m_levelSettings->m_platformerMode) return false; // left and right are not decided here
+
+        bool clicked = false;
+        bool dual = pl->m_gameState.m_isDualMode && pl->m_player2;
+        for (int p = 0; p < (dual ? 2 : 1); ++p) {
+            PlayerObject* real = p == 0 ? pl->m_player1 : pl->m_player2;
+            PlayerObject* copy = t.copyFor(p);
+            if (!real || !copy || real->m_isDead) continue;
+
+            bool holding = real->m_jumpBuffered;
+            Path keep = holding ? t.simulateHold(pl, real, copy, frames) : t.simulateRelease(pl, real, copy, frames);
+            if (!keep.died) continue; // fine as it is, nothing to do
+
+            Path change = holding ? t.simulateRelease(pl, real, copy, frames) : t.simulateHold(pl, real, copy, frames);
+            int keepLife = keep.deathFrame;
+            int changeLife = change.died ? change.deathFrame : INT_MAX;
+            if (changeLife > keepLife) {
+                pl->handleButton(!holding, 1, p == 0);
+                clicked = true;
+            }
+        }
+        return clicked;
     }
 
     int deathIn(PlayLayer* pl, int frames, int* who) {
@@ -214,16 +250,30 @@ namespace ivey::Assist {
         if (Trajectory::get().creating()) return;
 
         if (!s_node || s_owner != pl) {
-            s_node = CCDrawNode::create();
-            ccBlendFunc blend;
-            blend.src = GL_SRC_ALPHA;
-            blend.dst = GL_ONE_MINUS_SRC_ALPHA;
-            s_node->setBlendFunc(blend);
+            s_node = CCNode::create();
             pl->m_objectLayer->addChild(s_node, 450);
             s_owner = pl;
+            s_head = nullptr;
             s_count = 0;
         }
         s_node->setVisible(true);
+
+        // The trail is drawn in pieces. A drawing that only grows would eat memory, and clearing all of it
+        // at once made the whole trail vanish. Now only the oldest piece goes, so it rolls along with the player.
+        if (!s_head || s_count >= TRAIL_PIECE) {
+            auto piece = CCDrawNode::create();
+            ccBlendFunc blend;
+            blend.src = GL_SRC_ALPHA;
+            blend.dst = GL_ONE_MINUS_SRC_ALPHA;
+            piece->setBlendFunc(blend);
+            s_node->addChild(piece);
+            s_head = piece;
+            s_count = 0;
+            while (s_node->getChildrenCount() > static_cast<unsigned int>(TRAIL_PIECES)) {
+                if (auto oldest = static_cast<CCNode*>(s_node->getChildren()->objectAtIndex(0))) s_node->removeChild(oldest, true);
+                else break;
+            }
+        }
 
         bool dual = pl->m_gameState.m_isDualMode && pl->m_player2;
         for (int p = 0; p < (dual ? 2 : 1); ++p) {
@@ -236,26 +286,20 @@ namespace ivey::Assist {
                 {r.getMaxX(), r.getMinY()}, {r.getMinX(), r.getMinY()}
             };
             ccColor4F line = p == 0 ? ccc4f(1.f, 0.35f, 0.35f, 0.8f) : ccc4f(0.35f, 0.6f, 1.f, 0.8f);
-            s_node->drawPolygon(v, 4, ccc4f(0.f, 0.f, 0.f, 0.f), 0.4f, line);
+            s_head->drawPolygon(v, 4, ccc4f(0.f, 0.f, 0.f, 0.f), 0.4f, line);
             ++s_count;
-        }
-
-        // A drawing that only grows would eat memory, so it starts over now and then.
-        if (s_count > TRAIL_LIMIT) {
-            s_node->clear();
-            s_count = 0;
         }
     }
 
     void trailClear() {
-        if (s_node) s_node->clear();
-        s_count = 0;
+        resetTrail();
     }
 
     void teardown() {
         s_boxes = nullptr;
         s_boxesOwner = nullptr;
         s_node = nullptr;
+        s_head = nullptr;
         s_owner = nullptr;
         s_count = 0;
     }
