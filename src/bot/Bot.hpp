@@ -37,7 +37,6 @@ namespace ivey {
         bool renderAudio = true;   // the level song is added to the video
         std::string renderCodec;   // empty = pick one automatically
         int  corrInterval = 4;
-        int  waveInterval = 1;
         int  tpsMethod = 0;          // above 240 TPS: 0 auto, 1 step size hook, 2 time warp
         bool tpsClassic = false;     // step loop copied from xdBot, for comparing
         bool lightSteps = false;     // developer: skip PlayLayer::postUpdate on every step of a frame except the last

@@ -48,7 +48,6 @@ namespace ivey {
         renderCodec   = m->getSavedValue<std::string>("render-codec", "");
         renderAudio   = m->getSavedValue<bool>("render-audio", true);
         corrInterval  = m->getSavedValue<int>("corr-interval", 4);
-        waveInterval  = m->getSavedValue<int>("wave-interval", 1);
         tpsClassic    = m->getSavedValue<bool>("tps-classic", false);
         lightSteps    = m->getSavedValue<bool>("light-steps", false);
         tpsSingle     = m->getSavedValue<bool>("tps-single", false);
@@ -80,7 +79,6 @@ namespace ivey {
         if (!devMode && fx > 6) fx = 0;
         if (tps < 1 || tps > 65535) tps = 240;
         if (corrInterval < 1 || corrInterval > 10000) corrInterval = 4;
-        if (waveInterval < 1 || waveInterval > 10000) waveInterval = 1;
         if (trajectoryLength < 2 || trajectoryLength > 2000) trajectoryLength = 500;
         if (preventFrames < 1 || preventFrames > 30) preventFrames = 3;
         if (swiftClicks < 1 || swiftClicks > 100) swiftClicks = 2;
@@ -123,7 +121,6 @@ namespace ivey {
         m->setSavedValue("render-codec", renderCodec);
         m->setSavedValue("render-audio", renderAudio);
         m->setSavedValue("corr-interval", corrInterval);
-        m->setSavedValue("wave-interval", waveInterval);
         m->setSavedValue("tps-classic", tpsClassic);
         m->setSavedValue("light-steps", lightSteps);
         m->setSavedValue("tps-single", tpsSingle);
