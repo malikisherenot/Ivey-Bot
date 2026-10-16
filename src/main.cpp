@@ -329,8 +329,15 @@ namespace {
             if (g_tried) return g_patch != nullptr;
             g_tried = true;
             if (!intact()) {
-                bot.singleState = "code differs, another mod?";
-                log::warn("Single-update TPS: the instructions at the step count site are not the original ones, not patching");
+                // Echo and Silicate put the same kind of patch here when the game starts (their first words are the
+                // same as ours), Eclipse's TPS bypass changes the code next to it.
+                std::array<uint32_t, 10> now{};
+                std::memcpy(now.data(), site(), sizeof(now));
+                bool sameKind = now[0] == 0x58000100 && now[1] == 0xb9400000 && now[2] == 0x7100041f;
+                bot.singleState = sameKind ? "Echo/Silicate patch is active" : "code differs (Eclipse TPS bypass?)";
+                std::string words;
+                for (auto w : now) words += fmt::format("{:08x} ", w);
+                log::warn("Single-update TPS: the step count site is not the original code, not patching: {}", words);
                 return false;
             }
             // ldr x0, <count>; ldr w0, [x0]; cmp w0, #1; csinc w0, w0, wzr, ge (at least 1);
@@ -982,12 +989,17 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // or with the time warp method; those keep the loops below.
         if (bot.cfg.tpsSingle && !bot.singleBroken && tps > 240.f && bot.cfg.tpsMethod != 2 && !bot.cfg.tpsClassic &&
             !perStep() && !ivey::Renderer::get().active() && PlayLayer::get() && inPlay(this)) {
-            if (bot.hookState.empty()) {
-                bot.hookState = inspectDeltaHook();
-                bot.hookMissing = bot.hookState == "not installed";
+            // The list of hooks decides, not the "no sign of the hook" flag, which can be stale from a
+            // time of warp use. If the hook does not really run, the check after the update catches it.
+            if (bot.hookState.empty()) bot.hookState = inspectDeltaHook();
+            bool hookInstalled = bot.hookState != "not installed";
+            if (hookInstalled) {
+                bot.hookMissing = false;
+                bot.noHookCalls = 0;
             }
-            if (bot.hookMissing) {
-                bot.singleState = "needs the step hook";
+            if (!hookInstalled) {
+                bot.hookMissing = true;
+                bot.singleState = "needs the step hook (not installed)";
             }
             else if (singlestep::ready()) {
                 float realSingle = dt + bot.leftOver;
@@ -1188,6 +1200,9 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         }
 
         float tps = activeTps();
+        // The hook ran. This counts also when the game's own step size is kept (time warp method),
+        // or the "hook is missing" detector would wrongly fire.
+        if (tps > 240.f) bot.hookSeen = true;
         // At 240 TPS the game's own timing is exact, also when stepping one step at a time.
         // With the time warp method the game's own function must stay in charge of the step size.
         if (tps == 240.f || !(PlayLayer::get() || editorReplay(this)) || useWarp(tps)) {
