@@ -33,7 +33,7 @@ namespace ivey {
         std::vector<int> tabOrder(bool searchOpen) {
             std::vector<int> order = {0, TAB_TRAJECTORY, TAB_RENDER, 1, TAB_MACRO};
             if (searchOpen) order.push_back(TAB_SEARCH);
-            for (int id : {3, 5, 6, 7}) order.push_back(id);
+            for (int id : {5, 6}) order.push_back(id);
             return order;
         }
 
@@ -184,6 +184,16 @@ namespace ivey {
                              });
                     check("Smart Swift", c.swiftSmart);
                     check("Auto Safe Mode", c.autoSafe);
+                    check("Speedhack", c.speedhack, nullptr,
+                          [] { return fmt::format("x{:g}", Bot::get().cfg.speed); });
+                    editable("Speed", [] { return fmt::format("{:g}", Bot::get().cfg.speed); }, 0.01, 1000.0,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.speed = static_cast<float>(v);
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Speed set to x{:g}", cfg.speed);
+                             });
+                    check("Speedhack Audio", c.speedAudio);
                     break;
                 }
                 case 1: { // Bot
@@ -231,6 +241,14 @@ namespace ivey {
                           });
                     check("Classic TPS Loop", c.tpsClassic, nullptr,
                           [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
+                    action("Step Budget", nullptr, [] { return fmt::format("{} ms", Bot::get().cfg.stepBudget); });
+                    editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 250,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.stepBudget = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                                 Bot::get().status = fmt::format("Step budget {} ms", cfg.stepBudget);
+                             });
                     check("Position Correction", c.correction, nullptr,
                           [] { return fmt::format("every {}f", Bot::get().cfg.corrInterval); });
                     editable("Check every (frames)", [] { return std::to_string(Bot::get().cfg.corrInterval); }, 1, 10000,
@@ -325,38 +343,13 @@ namespace ivey {
                     });
                     break;
                 }
-                case 3: { // Physics
-                    check("Speedhack", c.speedhack, nullptr,
-                          [] { return fmt::format("x{:g}", Bot::get().cfg.speed); });
-                    editable("Speed", [] { return fmt::format("{:g}", Bot::get().cfg.speed); }, 0.01, 1000.0,
-                             [](double v) {
-                                 auto& cfg = Bot::get().cfg;
-                                 cfg.speed = static_cast<float>(v);
-                                 cfg.save();
-                                 Bot::get().status = fmt::format("Speed set to x{:g}", cfg.speed);
-                             });
-                    check("Speedhack Audio", c.speedAudio);
-                    action("Step Budget", nullptr, [] { return fmt::format("{} ms", Bot::get().cfg.stepBudget); });
-                    editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 250,
-                             [](double v) {
-                                 auto& cfg = Bot::get().cfg;
-                                 cfg.stepBudget = static_cast<int>(std::lround(v));
-                                 cfg.save();
-                                 Bot::get().status = fmt::format("Step budget {} ms", cfg.stepBudget);
-                             });
-                    action("Wave Checks", nullptr, [] { return fmt::format("every {}f", Bot::get().cfg.waveInterval); });
-                    editable("Wave check every (frames)", [] { return std::to_string(Bot::get().cfg.waveInterval); }, 1, 10000,
-                             [](double v) {
-                                 auto& cfg = Bot::get().cfg;
-                                 cfg.waveInterval = static_cast<int>(std::lround(v));
-                                 cfg.save();
-                                 Bot::get().status = fmt::format("Wave checks every {} frames", cfg.waveInterval);
-                             });
-                    break;
-                }
                 case 5: { // Visual
                     check("Show Overlay", c.showOverlay);
                     check("Menu Button", c.menuButton);
+                    check("Frame", c.lblFrame);
+                    check("Mode", c.lblMode);
+                    check("Macro", c.lblMacro);
+                    check("Accuracy", c.lblAccuracy);
                     break;
                 }
                 case 6: { // Theme
@@ -405,13 +398,6 @@ namespace ivey {
                     }, [] { return Mod::get()->getVersion().toVString(); });
                     break;
                 }
-                case 7: { // Labels
-                    check("Frame", c.lblFrame);
-                    check("Mode", c.lblMode);
-                    check("Macro", c.lblMacro);
-                    check("Accuracy", c.lblAccuracy);
-                    break;
-                }
                 case 8: { // Trajectory
                     check("Show Trajectory", c.trajectory, nullptr,
                           [] { return fmt::format("{}f", Bot::get().cfg.trajectoryLength); });
@@ -423,7 +409,6 @@ namespace ivey {
                                  Bot::get().status = fmt::format("Trajectory {} frames", cfg.trajectoryLength);
                              });
                     check("Release Line", c.trajectoryRelease);
-                    r.push_back(MenuRow{"Green = hold, red = release", nullptr, nullptr, nullptr, nullptr});
 
                     check("Prevent Death", c.preventDeath, nullptr,
                           [] { return fmt::format("{}f", Bot::get().cfg.preventFrames); });
@@ -434,11 +419,9 @@ namespace ivey {
                                  cfg.save();
                                  Bot::get().status = fmt::format("Prevent Death looks {} frames ahead", cfg.preventFrames);
                              });
-                    r.push_back(MenuRow{"Pauses before a death, click then step", nullptr, nullptr, nullptr, nullptr});
 
                     check("Show Hitboxes", c.hitboxes);
                     check("Hitbox Trail", c.hitboxTrail);
-                    r.push_back(MenuRow{"Runs do not count while these help you", nullptr, nullptr, nullptr, nullptr});
                     break;
                 }
                 case 10: { // Render
@@ -538,7 +521,7 @@ namespace ivey {
             }
 
             // Thin lines that group related rows.
-            static char const* const GROUPS[] = {"Instant Respawn", "Swift Clicks", "Auto Safe Mode",
+            static char const* const GROUPS[] = {"Instant Respawn", "Swift Clicks", "Auto Safe Mode", "Speedhack", "Frame",
                                                  "Record", "Clear Macro", "Step Budget", "Save Macro"};
             for (size_t i = 1; i < r.size(); ++i) {
                 for (auto g : GROUPS) if (r[i].label == g) r[i].sep = true;
@@ -636,14 +619,29 @@ namespace ivey {
         auto local = m_root->convertToNodeSpace(touch->getLocation());
         if (!CCRect(0.f, 0.f, W, H).containsPoint(local)) return false;
 
+        // A side (or the bottom right corner) resizes the window, the title bar moves it.
+        constexpr float EDGE = 9.f;
         m_drag = 0;
-        if (local.y > H - TITLE_H && local.x < W - 84.f) {
-            m_drag = 1; // title bar moves the window
+        m_sides = 0;
+        if (local.x > W - 32.f && local.y < 32.f) {
+            m_sides = 2 | 8;
         }
-        else if (local.x > W - 32.f && local.y < 32.f) {
-            m_drag = 2; // corner resizes it
+        else {
+            if (local.x < EDGE) m_sides |= 1;
+            if (local.x > W - EDGE) m_sides |= 2;
+            if (local.y > H - 5.f) m_sides |= 4;
+            if (local.y < EDGE) m_sides |= 8;
+        }
+
+        if (m_sides != 0) {
+            m_drag = 2;
             m_dragFrom = touch->getLocation();
             m_scaleFrom = m_scale;
+            m_rootFrom = m_root->getPosition();
+            showEdges();
+        }
+        else if (local.y > H - TITLE_H) {
+            m_drag = 1; // title bar moves the window
         }
         return true;
     }
@@ -657,25 +655,54 @@ namespace ivey {
         }
         else if (m_drag == 2) {
             auto now = touch->getLocation();
-            float grow = ((now.x - m_dragFrom.x) - (now.y - m_dragFrom.y)) / 400.f;
+            float dx = now.x - m_dragFrom.x;
+            float dy = now.y - m_dragFrom.y;
+
+            // Pulling a side outwards makes the window bigger, pushing it in makes it smaller.
+            float grow = 0.f;
+            int sides = 0;
+            if (m_sides & 1) { grow -= dx / W; ++sides; }
+            if (m_sides & 2) { grow += dx / W; ++sides; }
+            if (m_sides & 4) { grow += dy / H; ++sides; }
+            if (m_sides & 8) { grow -= dy / H; ++sides; }
+            if (sides > 1) grow /= static_cast<float>(sides);
             float next = std::clamp(m_scaleFrom + grow, 0.6f, 1.4f);
 
-            // keep the top left corner where it is
-            float top = m_root->getPositionY() + H * m_scale;
+            // The side opposite to the one that is dragged stays where it is.
+            float x = (m_sides & 1) ? m_rootFrom.x + W * (m_scaleFrom - next) : m_rootFrom.x;
+            float y = (m_sides & 4) ? m_rootFrom.y : m_rootFrom.y + H * (m_scaleFrom - next);
             m_scale = next;
             m_root->setScale(next);
-            m_root->setPositionY(top - H * next);
+            m_root->setPosition(x, y);
+            showEdges(); // the rainbow accent keeps moving
         }
     }
 
     void IveyMenu::ccTouchEnded(CCTouch*, CCEvent*) {
+        if (m_drag == 2) m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
         if (m_drag != 0) saveWindow();
         m_drag = 0;
+        m_sides = 0;
+        showEdges();
     }
 
     void IveyMenu::ccTouchCancelled(CCTouch*, CCEvent*) {
+        if (m_drag == 2) m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
         if (m_drag != 0) saveWindow();
         m_drag = 0;
+        m_sides = 0;
+        showEdges();
+    }
+
+    // The sides that are being dragged light up in the accent colour, and go dark again when let go.
+    void IveyMenu::showEdges() {
+        auto color = accentColor();
+        for (int i = 0; i < 4; ++i) {
+            if (!m_edge[i]) continue;
+            bool on = ((m_sides >> i) & 1) != 0;
+            m_edge[i]->setVisible(on);
+            if (on) m_edge[i]->setColor(color);
+        }
     }
 
     void IveyMenu::saveWindow() {
@@ -709,6 +736,17 @@ namespace ivey {
             mod->getSavedValue<float>("menu-y", win.height - 24.f - H * m_scale)
         }, m_scale));
         this->addChild(m_root);
+
+        // Strips along the four sides, only visible while that side is dragged.
+        for (int i = 0; i < 4; ++i) {
+            float w = i < 2 ? 3.f : W;
+            float h = i < 2 ? H : 3.f;
+            auto strip = CCLayerColor::create({255, 255, 255, 235}, w, h);
+            strip->setPosition({i == 1 ? W - 3.f : 0.f, i == 2 ? H - 3.f : 0.f});
+            strip->setVisible(false);
+            m_root->addChild(strip, 900);
+            m_edge[i] = strip;
+        }
 
         // soft shadow, thin border, then the window itself
         auto shadow = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
@@ -986,26 +1024,6 @@ namespace ivey {
         auto closeItem = CCMenuItemSpriteExtra::create(closeNode, nullptr, this, menu_selector(IveyMenu::onClose));
         closeItem->setPosition({W - 18.f, H - TITLE_H / 2.f - 2.f});
         m_tabMenu->addChild(closeItem);
-
-        // smaller / bigger window
-        auto sizeButton = [&](char const* text, float x, int dir) {
-            auto node = CCNode::create();
-            node->setContentSize({18.f, 16.f});
-            node->setAnchorPoint({0.5f, 0.5f});
-            node->addChild(CCLayerColor::create({60, 60, 60, 255}, 18.f, 16.f));
-            auto l = CCLabelBMFont::create(text, fontName().c_str());
-            styleText(l, 0.5f);
-            l->setColor({225, 225, 225});
-            l->setPosition({9.f, 8.f});
-            node->addChild(l, 1);
-            auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(IveyMenu::onResize));
-            item->m_scaleMultiplier = 1.f;
-            item->setTag(dir);
-            item->setPosition({x, H - TITLE_H / 2.f - 2.f});
-            m_tabMenu->addChild(item);
-        };
-        sizeButton("-", W - 66.f, -1);
-        sizeButton("+", W - 44.f, 1);
     }
 
     void IveyMenu::rebuild() {
@@ -1381,19 +1399,6 @@ namespace ivey {
     void IveyMenu::onEditCancel(CCObject*) {
         m_editClose = true;
         queue(false);
-    }
-
-    void IveyMenu::onResize(CCObject* sender) {
-        int dir = static_cast<CCNode*>(sender)->getTag();
-        float next = std::clamp(m_scale + 0.1f * static_cast<float>(dir), 0.6f, 1.4f);
-
-        // keep the top left corner where it is
-        float top = m_root->getPositionY() + H * m_scale;
-        m_scale = next;
-        m_root->setScale(next);
-        m_root->setPositionY(top - H * next);
-        m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
-        saveWindow();
     }
 
     void IveyMenu::onClose(CCObject*) {

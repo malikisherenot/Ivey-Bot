@@ -72,6 +72,7 @@ namespace ivey {
         void queue(bool force);
         void refreshRows();
         void saveWindow();
+        void showEdges();
         std::string structureKey() const;
         void openEditor(size_t row);
         void closeEditor();
@@ -81,7 +82,6 @@ namespace ivey {
         void onRow(cocos2d::CCObject* sender);
         void onArrow(cocos2d::CCObject* sender);
         void onClose(cocos2d::CCObject* sender);
-        void onResize(cocos2d::CCObject* sender);
         void onEditSet(cocos2d::CCObject* sender);
         void onEditCancel(cocos2d::CCObject* sender);
         void onClearSearch(cocos2d::CCObject* sender);
@@ -107,6 +107,9 @@ namespace ivey {
         float m_scale = 1.f;
         float m_scaleFrom = 1.f;
         int m_drag = 0; // 1 = moving, 2 = resizing
+        int m_sides = 0; // sides being dragged: 1 left, 2 right, 4 top, 8 bottom
+        cocos2d::CCPoint m_rootFrom;
+        cocos2d::CCLayerColor* m_edge[4] = {nullptr, nullptr, nullptr, nullptr};
         bool m_queued = false;
         bool m_closeAfter = false;
         bool m_force = false;
