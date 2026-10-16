@@ -799,40 +799,50 @@ namespace {
             }
             if (cfg.lblMacro) s += fmt::format("Macro: {} inputs\n", bot.macro.entries.size());
             if (cfg.lblAccuracy) {
-                // Step = the size of each physics step, Running = steps that really happen per second.
-                // Running below the TPS means the device can't keep up (see Step Budget).
-                auto& traj = ivey::Trajectory::get();
-                std::string stepText = traj.deltaSeen && traj.delta > 0.f ? fmt::format("{:.0f}", 60.f / traj.delta) : std::string("?");
-                s += fmt::format("Accuracy: {} TPS  Step: {}  Steps/s: {:.0f}  Progress/s: {:.0f}  Speed: {:.0f}%",
-                                 cfg.frameAccurate ? cfg.tps : 0, stepText, m_calls, m_running, m_speed);
                 float tpsNow = activeTps();
+                s += fmt::format("Accuracy: {} TPS  Speed: {:.0f}%", cfg.frameAccurate ? cfg.tps : 0, m_speed);
                 if (tpsNow != 240.f && !bot.tpsHonored) s += "  (game ignores TPS)";
-                else if (tpsNow != 240.f && !cfg.stepper && m_calls > 1.f && m_calls < tpsNow * 0.9f) s += "  (slow)";
                 if (bot.mode == Mode::Replay && cfg.correction) s += fmt::format("  Fixes: {}", bot.fixes);
                 s += "\n";
-                // For finding out why a TPS does not behave: does the hook run, and does every step move the clock?
-                if (activeTps() != 240.f) {
+
+                if (tpsNow != 240.f) {
                     if (bot.hookState.empty()) {
                         bot.hookState = inspectDeltaHook();
                         if (bot.hookState == "not installed") bot.hookMissing = true;
                     }
+
+                    // Developer mode: the numbers for finding out why a TPS does not behave.
                     if (cfg.devMode) {
-                        s += fmt::format("Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {} ({})\n", m_moves, m_hook,
+                        auto& traj = ivey::Trajectory::get();
+                        std::string stepText = traj.deltaSeen && traj.delta > 0.f ? fmt::format("{:.0f}", 60.f / traj.delta) : std::string("?");
+                        s += fmt::format("Steps/s: {:.0f}  Progress/s: {:.0f}  Step: {}  Moves/s: {:.0f}  Hook/s: {:.0f}  Hook step: {:.0f}  Hook: {} ({})\n",
+                                         m_calls, m_running, stepText, m_moves, m_hook,
                                          bot.hookLast > 1e-9 ? 1.0 / bot.hookLast : 0.0, bot.hookState, bot.hookInfo);
                     }
+
+                    // Everything else goes to the Geode log, once.
                     if (!m_modsScanned) {
                         m_modsScanned = true;
                         bot.otherMods = otherTimingMods();
+                        if (!bot.otherMods.empty()) log::info("Other mods hook the step function: {}", bot.otherMods);
                     }
-                    if (!bot.otherMods.empty()) {
-                        std::string list = bot.otherMods.size() > 64 ? bot.otherMods.substr(0, 61) + "..." : bot.otherMods;
-                        s += "Other mods hook the step function: " + list + "\n";
+                    static bool loggedWarp = false, loggedHook = false;
+                    if (tpsNow > 240.f && useWarp(tpsNow)) {
+                        if (!loggedWarp) {
+                            loggedWarp = true;
+                            log::info("No step size hook on this device: using the time warp method");
+                        }
                     }
-                    if (activeTps() > 240.f && useWarp(activeTps())) {
-                        s += "No step size hook on this device: using the time warp method\n";
+                    else if (m_calls > 100.f && m_hook < 1.f && !cfg.tpsClassic && cfg.tpsMethod != 2 && !loggedHook) {
+                        loggedHook = true;
+                        log::warn("The step size hook is not running, the physics stays at 240");
                     }
-                    else if (m_calls > 100.f && m_hook < 1.f && !cfg.tpsClassic && cfg.tpsMethod != 2) {
-                        s += "The step size hook is not running, the physics stays at 240\n";
+                    if (m_calls > 1.f && m_calls < tpsNow * 0.9f && !cfg.stepper) {
+                        static bool loggedSlow = false;
+                        if (!loggedSlow) {
+                            loggedSlow = true;
+                            log::info("Steps/s {:.0f} is below the TPS {:.0f}: the device cannot keep up (see Step Budget)", m_calls, tpsNow);
+                        }
                     }
                 }
             }
@@ -852,6 +862,9 @@ namespace {
 }
 
 $on_mod(Loaded) {
+    // What used to be info rows in the menu.
+    log::info("Trajectory: green = hold, red = release. Prevent Death pauses before a death, click then step. "
+              "Runs do not count while Trajectory, Prevent Death, Hitboxes or Hitbox Trail help you.");
     Bot::get().cfg.load();
     Bot::get().refreshFiles();
 }
@@ -1324,7 +1337,8 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             }
         }
         else if (bot.mode == Mode::Record) {
-            uint32_t every = static_cast<uint32_t>(waveActive(this) ? bot.cfg.waveInterval : bot.cfg.corrInterval);
+            // Waves are checked on every frame, no setting for it.
+            uint32_t every = static_cast<uint32_t>(waveActive(this) ? 1 : bot.cfg.corrInterval);
             if (every == 0) every = 1;
             if (frame % every == 0) bot.snapshot(this, frame);
         }
