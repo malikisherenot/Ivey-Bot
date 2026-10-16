@@ -47,7 +47,8 @@ namespace ivey {
         std::vector<std::string> codecs() const; // encoders that can be picked
 
     private:
-        std::string pickCodec() const;
+        std::vector<std::string> candidateCodecs() const;
+        void showWorld(bool show);
         std::filesystem::path makePath() const;
         void fail(std::string const& why);
         bool createFbo();
@@ -61,6 +62,7 @@ namespace ivey {
         bool m_active = false;
         bool m_starting = false;
         bool m_capturing = false;
+        bool m_hidden = false; // the level is not drawn on the screen while the video is made
         int m_w = 1920;
         int m_h = 1080;
         int m_fps = 60;

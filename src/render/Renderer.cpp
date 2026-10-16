@@ -226,11 +226,33 @@ namespace ivey {
         return out;
     }
 
-    std::string Renderer::pickCodec() const {
+    // The encoder that was picked, or for Auto every encoder that can be tried, hardware ones first:
+    // they leave the processor to the game. The first one that starts is used.
+    std::vector<std::string> Renderer::candidateCodecs() const {
         auto list = codecs();
         auto const& want = Bot::get().cfg.renderCodec;
-        if (!want.empty() && std::find(list.begin(), list.end(), want) != list.end()) return want;
-        return list.empty() ? std::string() : list.front();
+        if (!want.empty() && std::find(list.begin(), list.end(), want) != list.end()) return {want};
+
+        static char const* const hardware[] = {"h264_nvenc", "h264_videotoolbox", "h264_mediacodec", "h264_amf", "h264_qsv"};
+        std::vector<std::string> out;
+        for (auto name : hardware) {
+            if (std::find(list.begin(), list.end(), std::string(name)) != list.end()) out.push_back(name);
+        }
+        for (auto const& name : list) {
+            if (std::find(out.begin(), out.end(), name) == out.end()) out.push_back(name);
+        }
+        return out;
+    }
+
+    // The screen only shows the overlay while rendering: the level itself is drawn once, into the video.
+    void Renderer::showWorld(bool show) {
+        auto pl = PlayLayer::get();
+        if (!pl) {
+            m_hidden = false;
+            return;
+        }
+        if (pl->m_objectLayer) pl->m_objectLayer->setVisible(show);
+        m_hidden = !show;
     }
 
     std::filesystem::path Renderer::makePath() const {
@@ -332,13 +354,12 @@ namespace ivey {
             return fail(fmt::format("Too big for this device (max {})", maxSize));
         }
 
-        std::string codec = pickCodec();
-        if (codec.empty()) return fail("No video encoder found");
+        auto candidates = candidateCodecs();
+        if (candidates.empty()) return fail("No video encoder found");
 
         auto path = makePath();
         m_fileName = path.filename().string();
         m_videoPath = path;
-        m_usedCodec = codec;
 
         // the song is added when the video is done
         m_audio = cfg.renderAudio;
@@ -357,25 +378,36 @@ namespace ivey {
 
         ffmpeg::RenderSettings settings;
         settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
-        settings.m_codec = codec;
         settings.m_bitrate = static_cast<int64_t>(std::clamp(cfg.renderBitrate, 1, 500)) * 1000000;
         settings.m_width = static_cast<uint32_t>(m_w);
         settings.m_height = static_cast<uint32_t>(m_h);
         settings.m_fps = static_cast<uint16_t>(m_fps);
         settings.m_outputFile = path;
 
-        auto recorder = new ffmpeg::events::Recorder();
-        if (!recorder->isValid()) {
-            delete recorder;
-            return fail("FFmpeg API is not ready");
+        ffmpeg::events::Recorder* recorder = nullptr;
+        std::string codec, lastError;
+        for (auto const& candidate : candidates) {
+            auto attempt = new ffmpeg::events::Recorder();
+            if (!attempt->isValid()) {
+                delete attempt;
+                return fail("FFmpeg API is not ready");
+            }
+            settings.m_codec = candidate;
+            auto res = attempt->init(settings);
+            if (res.isErr()) {
+                lastError = res.unwrapErr();
+                log::warn("Render: encoder {} did not start: {}", candidate, lastError);
+                delete attempt;
+                continue;
+            }
+            recorder = attempt;
+            codec = candidate;
+            break;
         }
-        auto res = recorder->init(settings);
-        if (res.isErr()) {
-            std::string why = res.unwrapErr();
-            delete recorder;
-            return fail(why);
-        }
+        if (!recorder) return fail(lastError.empty() ? std::string("No video encoder could start") : lastError);
+        m_usedCodec = codec;
         m_recorder = recorder;
+        if (cfg.renderCodec.empty()) log::info("Render: encoder {} (auto)", codec);
 
         // the game is drawn at the video size from now on
         m_ogRes = CCEGLView::get()->getDesignResolutionSize();
@@ -509,7 +541,10 @@ namespace ivey {
             return;
         }
 
-        if (pl->m_isPaused) return;
+        if (pl->m_isPaused) {
+            if (m_hidden) showWorld(true); // the pause menu is on top of a visible level
+            return;
+        }
 
         if (m_warmup > 0) {
             --m_warmup;
@@ -523,6 +558,7 @@ namespace ivey {
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
 
+        showWorld(true);
         m_capturing = true;
         pl->visit();
         m_capturing = false;
@@ -534,6 +570,7 @@ namespace ivey {
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_oldFbo);
         CCDirector::sharedDirector()->setViewport();
+        showWorld(false); // drawn once already: not again on the screen
 
         {
             std::lock_guard lock(m_lock);
@@ -602,6 +639,7 @@ namespace ivey {
         m_starting = false;
         if (!m_active) return;
         m_active = false;
+        if (m_hidden) showWorld(true);
 
         {
             std::lock_guard lock(m_lock);
