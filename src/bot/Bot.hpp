@@ -117,6 +117,10 @@ namespace ivey {
         void resetStepping() {
             leftOver = 0.f;
             stepAdvance = 0.0;
+            if (hookState != "not installed") { // a "missing" verdict from earlier does not stay forever
+                hookMissing = false;
+                noHookCalls = 0;
+            }
             logFrames = 30; // the next frames are written to the log one by one
         }
 
