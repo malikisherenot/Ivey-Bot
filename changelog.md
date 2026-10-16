@@ -1,5 +1,16 @@
 # Ivey Bot Changelog
 
+## v1.20.3
+
+- The menu can be dragged from anywhere that is not a button, not only from the title bar
+
+## v1.20.2
+
+- Fixed: macros from other bots (.gdr, .gdr.json) no longer force the player's rotation on every frame. That stopped the cube flip and the portal/orb effects, and counted thousands of "fixes". Their checks now have a wider margin and only move the position
+- Hitbox Trail rolls along (the oldest part goes, the rest stays) instead of clearing everything at once
+- Renderer: the level is drawn once (into the video) and not again on the screen; Auto picks a hardware encoder first and falls back to the next one if it does not start
+- Auto Click (Assist tab): tries hold and release on a copy of the player and keeps the input that lives longer. The run does not count
+
 ## v1.20.1
 
 - Overlay: the Accuracy line is short (TPS and speed). Steps/s, Progress/s, Step and the hook numbers are developer-only, the rest (other mods, hook notices, slow warning) goes to the Geode log
