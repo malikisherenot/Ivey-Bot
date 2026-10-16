@@ -1,5 +1,13 @@
 # Ivey Bot Changelog
 
+## v1.20.1
+
+- Overlay: the Accuracy line is short (TPS and speed). Steps/s, Progress/s, Step and the hook numbers are developer-only, the rest (other mods, hook notices, slow warning) goes to the Geode log
+- Menu: info rows removed from the Assist tab (written to the log at start)
+- Wave Checks setting removed, waves are always checked on every frame
+- Physics and Labels tabs merged into Gameplay, Bot and Visual, so no tab has only 2 features
+- Resize by dragging a side or the corner (it lights up while dragging), the + and - buttons are gone
+
 ## v1.20.0
 
 - Single-Update TPS (Android arm64, GD 2.2081, off by default): the game's own step loop makes all the steps of a frame in one update call, like Echo and Silicate do
