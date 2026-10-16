@@ -287,7 +287,7 @@ namespace {
     // is stepped one step at a time for them, even at 240 TPS.
     bool perStep() {
         auto& cfg = Bot::get().cfg;
-        return cfg.preventDeath || cfg.hitboxTrail;
+        return cfg.preventDeath || cfg.hitboxTrail || cfg.autoClick;
     }
 
     // Above 240 TPS the game only takes smaller steps through its step-size function. On a device where
@@ -1118,6 +1118,11 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 bot.status = fmt::format("Prevent Death: P{} dies in {} frames, click and step", predictedWho + 1, predicted - done);
                 paused = true;
                 break;
+            }
+
+            // Auto Click: decides hold or release for the coming step by trying both on a copy of the player.
+            if (bot.cfg.autoClick && bot.mode != Mode::Replay && !ivey::Renderer::get().active() && inPlay(this)) {
+                if (ivey::Assist::autoClick(PlayLayer::get(), bot.cfg.autoFrames)) bot.safeMode = true; // a bot clicked, the run does not count
             }
 
             double beforeCall = m_gameState.m_levelTime;
