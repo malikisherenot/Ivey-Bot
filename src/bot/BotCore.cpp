@@ -51,6 +51,7 @@ namespace ivey {
         waveInterval  = m->getSavedValue<int>("wave-interval", 1);
         tpsClassic    = m->getSavedValue<bool>("tps-classic", false);
         lightSteps    = m->getSavedValue<bool>("light-steps", false);
+        tpsSingle     = m->getSavedValue<bool>("tps-single", false);
         tpsMethod     = m->getSavedValue<int>("tps-method", 0);
         if (tpsMethod < 0 || tpsMethod > 2) tpsMethod = 0;
         stepBudget    = m->getSavedValue<int>("step-budget", 33);
@@ -125,6 +126,7 @@ namespace ivey {
         m->setSavedValue("wave-interval", waveInterval);
         m->setSavedValue("tps-classic", tpsClassic);
         m->setSavedValue("light-steps", lightSteps);
+        m->setSavedValue("tps-single", tpsSingle);
         m->setSavedValue("tps-method", tpsMethod);
         m->setSavedValue("step-budget", stepBudget);
         m->setSavedValue("tps", b.active ? b.tps : tps);
