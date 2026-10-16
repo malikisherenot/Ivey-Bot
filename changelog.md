@@ -1,5 +1,12 @@
 # Ivey Bot Changelog
 
+## v1.20.0
+
+- Single-Update TPS (Android arm64, GD 2.2081, off by default): the game's own step loop makes all the steps of a frame in one update call, like Echo and Silicate do
+- Step size hook fixed: it returns a double like the game's function, so it is installed now (it never was before)
+- With the time warp method the hook leaves the game's own step size alone
+- Light Steps is developer-only now
+
 ## v1.19.9
 
 - Fix build: Geode 5.11.1 has no Mod::isEnabled
