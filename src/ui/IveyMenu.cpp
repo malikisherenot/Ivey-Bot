@@ -219,9 +219,16 @@ namespace ivey {
                     if (c.devMode) {
                         check("Log TPS To Geode Log", c.tpsLog, nullptr,
                               [] { return std::string(Bot::get().cfg.tpsLog ? "writing" : "off"); });
+                        check("Light Steps (test)", c.lightSteps, nullptr,
+                              [] { return std::string(Bot::get().cfg.lightSteps ? "visuals once per frame" : "off"); });
                     }
-                    check("Light Steps (test)", c.lightSteps, nullptr,
-                          [] { return std::string(Bot::get().cfg.lightSteps ? "visuals once per frame" : "off"); });
+                    check("Single-Update TPS", c.tpsSingle, nullptr,
+                          [] {
+                              auto& bot = Bot::get();
+                              if (!bot.cfg.tpsSingle) return std::string("off");
+                              if (bot.singleBroken) return std::string("failed, normal loop");
+                              return bot.singleState.empty() ? std::string("on") : bot.singleState;
+                          });
                     check("Classic TPS Loop", c.tpsClassic, nullptr,
                           [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
                     check("Position Correction", c.correction, nullptr,
