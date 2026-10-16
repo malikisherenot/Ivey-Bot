@@ -1,6 +1,9 @@
 #include <Geode/Geode.hpp>
 #include <algorithm>
 #include <chrono>
+#include <array>
+#include <cstring>
+#include <vector>
 #include <unordered_set>
 #include <cmath>
 #include <climits>
@@ -298,6 +301,76 @@ namespace {
             case 2: return true;
             default: return bot.hookMissing;
         }
+    }
+
+    // Single-update TPS (Android arm64, GD 2.2081): instead of calling the game's update once per step, the
+    // few instructions in GJBaseGameLayer::update that work out how many steps a frame has are swapped for a
+    // read of a number we set. Then ONE update call makes all the steps of the frame, inside the game's own
+    // step loop, and the per-call work of the game (camera, visibility, effects) is paid once per frame.
+    // The site is the same one the other TPS mods (Eclipse, Echo, Silicate) patch, so if the instructions
+    // there are not the original ones, nothing is patched and the normal loop stays in use.
+    // The patch is only on while our own update call runs, and off at every other moment.
+    namespace singlestep {
+#ifdef GEODE_IS_ANDROID64
+        constexpr uintptr_t kSite = 0x89d9f8;
+        constexpr std::array<uint32_t, 10> kOriginal = {
+            0x1e62100a, 0x1e6a096a, 0x1e624140, 0x1e264009, 0x1e2e1000,
+            0x1e202130, 0x5400758d, 0x1e380120, 0x1e620000, 0xb900e3a0
+        };
+        uint32_t g_count = 1;
+        Patch* g_patch = nullptr;
+        bool g_tried = false;
+
+        void* site() { return reinterpret_cast<void*>(geode::base::get() + kSite); }
+        bool intact() { return std::memcmp(site(), kOriginal.data(), sizeof(kOriginal)) == 0; }
+
+        bool ready() {
+            auto& bot = Bot::get();
+            if (g_tried) return g_patch != nullptr;
+            g_tried = true;
+            if (!intact()) {
+                bot.singleState = "code differs, another mod?";
+                log::warn("Single-update TPS: the instructions at the step count site are not the original ones, not patching");
+                return false;
+            }
+            // ldr x0, <count>; ldr w0, [x0]; cmp w0, #1; csinc w0, w0, wzr, ge (at least 1);
+            // scvtf d0, w0; str w0, [x29, #0xe0]; b +16 (past the old count code); nop; <address of count>
+            std::array<uint32_t, 10> words = {
+                0x58000100, 0xb9400000, 0x7100041f, 0x1a9fa400,
+                0x1e620000, 0xb900e3a0, 0x14000004, 0xd503201f, 0, 0
+            };
+            uint32_t* where = &g_count;
+            std::memcpy(words.data() + 8, &where, sizeof(where));
+            std::vector<uint8_t> bytes(sizeof(words));
+            std::memcpy(bytes.data(), words.data(), sizeof(words));
+            auto result = Mod::get()->patch(site(), bytes);
+            if (!result) {
+                bot.singleState = "could not patch";
+                log::warn("Single-update TPS: the patch could not be made");
+                return false;
+            }
+            g_patch = result.unwrap();
+            (void)g_patch->disable(); // only on while our own update runs
+            bot.singleState = "ready";
+            log::info("Single-update TPS: ready");
+            return true;
+        }
+
+        bool begin(uint32_t count) {
+            if (!g_patch || !intact()) return false; // intact: it is off and nobody else changed it
+            g_count = count;
+            return g_patch->enable().isOk();
+        }
+
+        void end() { if (g_patch) (void)g_patch->disable(); }
+#else
+        bool ready() {
+            Bot::get().singleState = "Android arm64 only";
+            return false;
+        }
+        bool begin(uint32_t) { return false; }
+        void end() {}
+#endif
     }
 
     // The last value a guard set, and what it replaced. If a guard could not put the value back, the
@@ -904,6 +977,72 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             return;
         }
 
+        // Single-update TPS: one update call per frame, the game's own step loop makes all the steps.
+        // Not used when something has to look at every step (Prevent Death, hitbox trail), while rendering,
+        // or with the time warp method; those keep the loops below.
+        if (bot.cfg.tpsSingle && !bot.singleBroken && tps > 240.f && bot.cfg.tpsMethod != 2 && !bot.cfg.tpsClassic &&
+            !perStep() && !ivey::Renderer::get().active() && PlayLayer::get() && inPlay(this)) {
+            if (bot.hookState.empty()) {
+                bot.hookState = inspectDeltaHook();
+                bot.hookMissing = bot.hookState == "not installed";
+            }
+            if (bot.hookMissing) {
+                bot.singleState = "needs the step hook";
+            }
+            else if (singlestep::ready()) {
+                float realSingle = dt + bot.leftOver;
+                if (realSingle > dt && newDt < dt) realSingle = dt;
+                int count = static_cast<int>(std::floor(static_cast<double>(realSingle) / static_cast<double>(newDt) + 1e-4));
+
+                // A batch cannot be stopped half way, so its size is kept inside the step budget by what a step cost lately.
+                int cap = bot.singleCostMs > 0.0 ? std::max(1, static_cast<int>(static_cast<double>(bot.cfg.stepBudget) / bot.singleCostMs)) : 64;
+                count = std::clamp(count, 0, cap);
+
+                if (count > 0) {
+                    unsigned long long hooksBefore = bot.hookCalls;
+                    bot.singleTps = tps;
+                    bot.singleCount = count;
+                    bot.singleActive = true;
+                    bool began = singlestep::begin(static_cast<uint32_t>(count));
+                    if (!began) {
+                        bot.singleActive = false;
+                        bot.singleBroken = true;
+                        bot.singleState = "patch could not be turned on";
+                    }
+                    else {
+                        auto callStart = std::chrono::high_resolution_clock::now();
+                        GJBaseGameLayer::update(static_cast<float>(count) * newDt);
+                        double ns = std::chrono::duration<double, std::nano>(std::chrono::high_resolution_clock::now() - callStart).count();
+                        singlestep::end();
+                        bot.singleActive = false;
+
+                        double perStepMs = ns / 1.0e6 / count;
+                        bot.singleCostMs = bot.singleCostMs > 0.0 ? bot.singleCostMs * 0.8 + perStepMs * 0.2 : perStepMs;
+                        bot.stepNs += ns;
+                        bot.stepCalls += count;
+                        bot.stepMoves += count;
+                        ++bot.loopFrames;
+                        if (bot.hookCalls == hooksBefore) {
+                            // The step size hook did not run, so the steps were not 1 / TPS long: give up on this mode.
+                            bot.singleBroken = true;
+                            bot.singleState = "step hook did not run";
+                            log::warn("Single-update TPS: the step size hook did not run, going back to the normal loop");
+                        }
+                    }
+                }
+
+                if (!bot.singleBroken) {
+                    bot.tpsHonored = true;
+                    bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) -
+                                                                 static_cast<double>(newDt) * count, -0.05, 0.1));
+                    if (auto pl = PlayLayer::get()) {
+                        if (!ivey::Trajectory::get().creating()) ivey::Trajectory::get().update(pl);
+                    }
+                    return;
+                }
+            }
+        }
+
         // Until the game reports its own step size, use the one that is being fed to it.
         if (!ivey::Trajectory::get().deltaSeen) ivey::Trajectory::get().delta = 60.f * newDt;
 
@@ -1028,11 +1167,30 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
     }
 
     // Also from xdBot's TPS bypass: the step size follows the chosen TPS.
-    float getModifiedDelta(float dt) {
+    // The game's function returns a double. With a float here the hook was never installed on any SDK version.
+    double getModifiedDelta(float dt) {
         auto& bot = Bot::get();
+
+        // Single-update TPS: the batch of steps is run inside one update call, every step is exactly 1 / TPS.
+        if (bot.singleActive) {
+            if (0 < m_resumeTimer) {
+                m_resumeTimer--;
+                ++bot.hookCalls;
+                return 0.0;
+            }
+            float warp = m_gameState.m_timeWarp <= 1.0 ? static_cast<float>(m_gameState.m_timeWarp) : 1.f;
+            if (!std::isfinite(warp) || !(warp > 0.f)) warp = 1.f;
+            float step = static_cast<float>((1.0 / static_cast<double>(bot.singleTps)) * static_cast<double>(warp));
+            ++bot.hookCalls;
+            bot.hookSeen = true;
+            bot.hookLast = static_cast<double>(step) * bot.singleCount;
+            return bot.hookLast;
+        }
+
         float tps = activeTps();
         // At 240 TPS the game's own timing is exact, also when stepping one step at a time.
-        if (tps == 240.f || !(PlayLayer::get() || editorReplay(this))) {
+        // With the time warp method the game's own function must stay in charge of the step size.
+        if (tps == 240.f || !(PlayLayer::get() || editorReplay(this)) || useWarp(tps)) {
             return GJBaseGameLayer::getModifiedDelta(dt);
         }
 
