@@ -1481,6 +1481,16 @@ class $modify(IveyPause, PauseLayer) {
         auto btn = makeButton(this, menu_selector(IveyPause::onIvey));
         if (!btn) return;
 
+        // In the list of mod buttons on the right, where the other bots put theirs.
+        if (auto list = this->getChildByID("right-button-menu")) {
+            btn->setScale(0.55f);
+            btn->setID("ivey-menu-button");
+            list->addChild(btn);
+            list->updateLayout();
+            return;
+        }
+
+        // The game has no such list: a button of its own in the corner.
         auto menu = CCMenu::create();
         menu->setPosition({0.f, 0.f});
         btn->setPosition({BUTTON_SIZE / 2.f + 12.f, BUTTON_SIZE / 2.f + 12.f});
