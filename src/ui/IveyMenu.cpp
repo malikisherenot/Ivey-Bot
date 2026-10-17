@@ -35,7 +35,7 @@ namespace ivey {
                                    "Theme", "Labels", "Assist", "Search", "Render"};
 
         std::vector<int> tabOrder(bool searchOpen) {
-            std::vector<int> order = {0, TAB_TRAJECTORY, TAB_RENDER, 1, TAB_MACRO};
+            std::vector<int> order = {1, TAB_MACRO, 0, TAB_TRAJECTORY, TAB_RENDER}; // Bot and Macro first
             if (searchOpen) order.push_back(TAB_SEARCH);
             for (int id : {5, 6}) order.push_back(id);
             return order;
@@ -273,25 +273,6 @@ namespace ivey {
                         nullptr, tpsText
                     });
                     editable("TPS", tpsValue, 1, 65535, setTps);
-                    action("TPS Method", [] {
-                        auto& cfg = Bot::get().cfg;
-                        cfg.tpsMethod = (cfg.tpsMethod + 1) % 3;
-                        cfg.save();
-                        Bot::get().resetStepping();
-                    }, [] {
-                        auto& bot = Bot::get();
-                        switch (bot.cfg.tpsMethod) {
-                            case 1: return std::string("step hook");
-                            case 2: return std::string("time warp");
-                            default: return std::string(bot.hookMissing ? "auto (time warp)" : "auto");
-                        }
-                    });
-                    if (c.devMode) {
-                        check("Log TPS To Geode Log", c.tpsLog, nullptr,
-                              [] { return std::string(Bot::get().cfg.tpsLog ? "writing" : "off"); });
-                        check("Light Steps (test)", c.lightSteps, nullptr,
-                              [] { return std::string(Bot::get().cfg.lightSteps ? "visuals once per frame" : "off"); });
-                    }
                     check("Single-Update TPS", c.tpsSingle, nullptr,
                           [] {
                               auto& bot = Bot::get();
@@ -299,25 +280,49 @@ namespace ivey {
                               if (bot.singleBroken) return std::string("failed, normal loop");
                               return bot.singleState.empty() ? std::string("on") : bot.singleState;
                           });
-                    check("Classic TPS Loop", c.tpsClassic, nullptr,
-                          [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
-                    action("Step Budget", nullptr, [] { return fmt::format("{} ms", Bot::get().cfg.stepBudget); });
-                    editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 250,
-                             [](double v) {
-                                 auto& cfg = Bot::get().cfg;
-                                 cfg.stepBudget = static_cast<int>(std::lround(v));
-                                 cfg.save();
-                                 Bot::get().status = fmt::format("Step budget {} ms", cfg.stepBudget);
-                             });
+
+                    // The advanced TPS choices: only with developer mode, the defaults are the best for most.
+                    if (c.devMode) {
+                        action("TPS Method", [] {
+                            auto& cfg = Bot::get().cfg;
+                            cfg.tpsMethod = (cfg.tpsMethod + 1) % 3;
+                            cfg.save();
+                            Bot::get().resetStepping();
+                        }, [] {
+                            auto& bot = Bot::get();
+                            switch (bot.cfg.tpsMethod) {
+                                case 1: return std::string("step hook");
+                                case 2: return std::string("time warp");
+                                default: return std::string(bot.hookMissing ? "step hook (missing: time warp)" : "step hook (default)");
+                            }
+                        });
+                        check("Classic TPS Loop", c.tpsClassic, nullptr,
+                              [] { return std::string(Bot::get().cfg.tpsClassic ? "xdBot method" : "measured"); });
+                        action("Step Budget", nullptr, [] { return fmt::format("{} ms", Bot::get().cfg.stepBudget); });
+                        editable("Max time per frame (ms)", [] { return std::to_string(Bot::get().cfg.stepBudget); }, 1, 250,
+                                 [](double v) {
+                                     auto& cfg = Bot::get().cfg;
+                                     cfg.stepBudget = static_cast<int>(std::lround(v));
+                                     cfg.save();
+                                     Bot::get().status = fmt::format("Step budget {} ms", cfg.stepBudget);
+                                 });
+                        check("Log TPS To Geode Log", c.tpsLog, nullptr,
+                              [] { return std::string(Bot::get().cfg.tpsLog ? "writing" : "off"); });
+                        check("Light Steps (test)", c.lightSteps, nullptr,
+                              [] { return std::string(Bot::get().cfg.lightSteps ? "visuals once per frame" : "off"); });
+                    }
+
                     check("Position Correction", c.correction, nullptr,
                           [] { return fmt::format("every {}f", Bot::get().cfg.corrInterval); });
-                    editable("Check every (frames)", [] { return std::to_string(Bot::get().cfg.corrInterval); }, 1, 10000,
-                             [](double v) {
-                                 auto& cfg = Bot::get().cfg;
-                                 cfg.corrInterval = static_cast<int>(std::lround(v));
-                                 cfg.save();
-                                 Bot::get().status = fmt::format("Checks every {} frames", cfg.corrInterval);
-                             });
+                    if (c.devMode) {
+                        editable("Check every (frames)", [] { return std::to_string(Bot::get().cfg.corrInterval); }, 1, 10000,
+                                 [](double v) {
+                                     auto& cfg = Bot::get().cfg;
+                                     cfg.corrInterval = static_cast<int>(std::lround(v));
+                                     cfg.save();
+                                     Bot::get().status = fmt::format("Checks every {} frames", cfg.corrInterval);
+                                 });
+                    }
                     r.push_back(MenuRow{
                         "Record",
                         [] { return Bot::get().mode == Mode::Record && Bot::get().onlyPlayer < 0; },
@@ -410,6 +415,40 @@ namespace ivey {
                     check("Mode", c.lblMode);
                     check("Macro", c.lblMacro);
                     check("Accuracy", c.lblAccuracy);
+                    editable("Label Size (%)", [] { return std::to_string(Bot::get().cfg.lblScale); }, 50, 200,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.lblScale = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                             });
+                    editable("Label Opacity (%)", [] { return std::to_string(Bot::get().cfg.lblOpacity); }, 10, 100,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.lblOpacity = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                             });
+                    action("Label Corner", [] {
+                        auto& cfg = Bot::get().cfg;
+                        cfg.lblCorner = (cfg.lblCorner + 1) % 4;
+                        cfg.save();
+                    }, [] { return std::string(LABEL_CORNER_NAMES[Bot::get().cfg.lblCorner % 4]); });
+                    action("Label Color", [] {
+                        auto& cfg = Bot::get().cfg;
+                        cfg.lblColor = (cfg.lblColor + 1) % LABEL_COLOR_COUNT;
+                        cfg.save();
+                    }, [] { return std::string(LABEL_COLOR_NAMES[Bot::get().cfg.lblColor % LABEL_COLOR_COUNT]); });
+                    editable("Label Distance From Side", [] { return std::to_string(Bot::get().cfg.lblX); }, 0, 400,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.lblX = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                             });
+                    editable("Label Distance From Top/Bottom", [] { return std::to_string(Bot::get().cfg.lblY); }, 0, 300,
+                             [](double v) {
+                                 auto& cfg = Bot::get().cfg;
+                                 cfg.lblY = static_cast<int>(std::lround(v));
+                                 cfg.save();
+                             });
                     break;
                 }
                 case 6: { // Theme
@@ -594,7 +633,7 @@ namespace ivey {
 
             // Thin lines that group related rows.
             static char const* const GROUPS[] = {"Instant Respawn", "Swift Clicks", "Auto Safe Mode", "Speedhack", "Frame",
-                                                 "Record", "Clear Macro", "Step Budget", "Save Macro"};
+                                                 "Record", "Clear Macro", "Step Budget", "Save Macro", "Label Size (%)"};
             for (size_t i = 1; i < r.size(); ++i) {
                 for (auto g : GROUPS) if (r[i].label == g) r[i].sep = true;
             }
@@ -604,38 +643,38 @@ namespace ivey {
 
     std::string const& fontName() {
         static std::string name = [] {
-            std::string abel = std::string("abel.fnt"_spr);
+            std::string roboto = std::string("roboto.fnt"_spr);
             auto utils = CCFileUtils::get();
-            if (utils->isFileExist(abel.c_str())) return abel;
-            std::string full = utils->fullPathForFilename(abel.c_str(), false);
-            if (full != abel && utils->isFileExist(full.c_str())) return abel;
+            if (utils->isFileExist(roboto.c_str())) return roboto;
+            std::string full = utils->fullPathForFilename(roboto.c_str(), false);
+            if (full != roboto && utils->isFileExist(full.c_str())) return roboto;
             return std::string("chatFont.fnt");
         }();
         return name;
     }
 
-    // Matches Abel's height to chatFont's, so the sizes stay right
+    // Matches the height of the menu font (Roboto) to chatFont's, so the sizes stay right
     // no matter how the generated font was scaled.
     float fontScale() {
         static float scale = [] {
             if (fontName() == "chatFont.fnt") return 1.f;
 
-            auto abel = CCLabelBMFont::create("Ag", fontName().c_str());
+            auto menuFont = CCLabelBMFont::create("Ag", fontName().c_str());
             auto base = CCLabelBMFont::create("Ag", "chatFont.fnt");
-            if (!abel || !base) return 1.f;
+            if (!menuFont || !base) return 1.f;
 
-            float ah = abel->getContentSize().height;
+            float ah = menuFont->getContentSize().height;
             float bh = base->getContentSize().height;
             if (ah <= 0.f || bh <= 0.f) return 1.f;
 
-            return std::clamp(bh / ah * 1.15f, 0.01f, 4.f);
+            return std::clamp(bh / ah, 0.01f, 4.f);
         }();
         return scale;
     }
 
-    // Abel is narrow, so it is stretched sideways a little.
+    // Roboto has the right width as it is.
     float fontWidth() {
-        return fontName() == "chatFont.fnt" ? 1.f : 1.3f;
+        return 1.f;
     }
 
     void styleText(CCLabelBMFont* label, float scale) {
@@ -1463,7 +1502,7 @@ namespace ivey {
             holder->setPosition({10.f, y - rowH / 2.f});
             m_list->addChild(holder);
 
-            if (row.sep) {
+            if (row.sep || (m_tab == TAB_TRAJECTORY && i > 0)) { // the Assist tab has a line between every option
                 auto line = CCLayerColor::create({52, 52, 52, 255}, rowW, 1.f);
                 line->setPosition({0.f, rowH + 0.5f});
                 holder->addChild(line);

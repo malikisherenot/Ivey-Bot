@@ -8,7 +8,7 @@ namespace ivey {
 
     class ThemeFx;
 
-    // Abel when it loaded, chatFont otherwise.
+    // Roboto when it loaded, chatFont otherwise.
     std::string const& fontName();
     float fontScale();
     float fontWidth();
@@ -166,7 +166,7 @@ namespace ivey {
         std::string m_query;
         int m_editIndex = -1;
         bool m_editClose = false;
-        int m_tab = 0;
+        int m_tab = 1; // the Bot tab
         int m_tabRows = 1;
         bool m_searchOpen = false;
     };
