@@ -1,6 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <array>
 #include <cstring>
 #include <vector>
@@ -296,7 +297,7 @@ namespace {
     bool useWarp(float tps) {
         auto& bot = Bot::get();
         if (tps <= 240.f) return false;
-        switch (bot.cfg.tpsMethod) {
+        switch (bot.cfg.methodNow()) {
             case 1: return false;
             case 2: return true;
             default: return bot.hookMissing;
@@ -633,6 +634,7 @@ namespace {
         float m_speed = 100.f;      // game seconds per real second, in percent
         bool m_modsScanned = false;
         float m_clock = 0.f;        // steps made per second of level time (240 with the time warp method, the TPS with the hook)
+        std::array<int, 6> m_style{-1, -1, -1, -1, -1, -1}; // label settings the text was last set up with
         CCMenu* m_renderMenu = nullptr;
 
     public:
@@ -729,7 +731,29 @@ namespace {
             }
         }
 
+        // Size, opacity, corner, colour and distance of the text, from the settings. Only touched when one changed.
+        void applyStyle() {
+            auto& cfg = Bot::get().cfg;
+            std::array<int, 6> now = {cfg.lblScale, cfg.lblOpacity, cfg.lblCorner, cfg.lblColor, cfg.lblX, cfg.lblY};
+            if (now == m_style) return;
+            m_style = now;
+
+            auto win = CCDirector::get()->getWinSize();
+            bool right = cfg.lblCorner == 1 || cfg.lblCorner == 3;
+            bool bottom = cfg.lblCorner >= 2;
+            float x = static_cast<float>(cfg.lblX);
+            float y = static_cast<float>(cfg.lblY);
+            m_label->setAnchorPoint({right ? 1.f : 0.f, bottom ? 0.f : 1.f});
+            m_label->setPosition({right ? win.width - x : x, bottom ? y : win.height - y});
+            m_label->setAlignment(right ? kCCTextAlignmentRight : kCCTextAlignmentLeft);
+            ivey::styleText(m_label, 0.5f * static_cast<float>(cfg.lblScale) / 100.f);
+            m_label->setOpacity(static_cast<GLubyte>(255.f * static_cast<float>(cfg.lblOpacity) / 100.f));
+            auto const* color = ivey::LABEL_COLORS[cfg.lblColor % ivey::LABEL_COLOR_COUNT];
+            m_label->setColor({color[0], color[1], color[2]});
+        }
+
         void update(float) override {
+            applyStyle();
             auto& bot = Bot::get();
             auto& cfg = bot.cfg;
             auto pl = PlayLayer::get();
@@ -833,7 +857,7 @@ namespace {
                             log::info("No step size hook on this device: using the time warp method");
                         }
                     }
-                    else if (m_calls > 100.f && m_hook < 1.f && !cfg.tpsClassic && cfg.tpsMethod != 2 && !loggedHook) {
+                    else if (m_calls > 100.f && m_hook < 1.f && !cfg.classicNow() && cfg.methodNow() != 2 && !loggedHook) {
                         loggedHook = true;
                         log::warn("The step size hook is not running, the physics stays at 240");
                     }
@@ -871,6 +895,13 @@ $on_mod(Loaded) {
 
 // Inputs, TPS and replays.
 class $modify(IveyGameLayer, GJBaseGameLayer) {
+    // The TPS code is asked first, ahead of other bots that change the step as well. Echo asks for First, so the
+    // lowest number there is, is used here: a lower number runs earlier. Silicate's priority is not known.
+    static void onModify(auto& self) {
+        (void)self.setHookPriority("GJBaseGameLayer::update", std::numeric_limits<int32_t>::min());
+        (void)self.setHookPriority("GJBaseGameLayer::getModifiedDelta", std::numeric_limits<int32_t>::min());
+    }
+
     void handleButton(bool down, int button, bool isPlayer1) {
         auto& bot = Bot::get();
         bool play = inPlay(this);
@@ -969,7 +1000,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
         // Classic loop: the same method as the xdBot TPS bypass, step for step. It is here to compare
         // with the measured loop below when the TPS does not behave.
-        if (bot.cfg.tpsClassic && !perStep()) {
+        if (bot.cfg.classicNow() && !perStep()) {
             float realClassic = dt + bot.leftOver;
             if (realClassic > dt && newDt < dt) realClassic = dt;
 
@@ -1001,7 +1032,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // Single-update TPS: one update call per frame, the game's own step loop makes all the steps.
         // Not used when something has to look at every step (Prevent Death, hitbox trail), while rendering,
         // or with the time warp method; those keep the loops below.
-        if (bot.cfg.tpsSingle && !bot.singleBroken && tps > 240.f && bot.cfg.tpsMethod != 2 && !bot.cfg.tpsClassic &&
+        if (bot.cfg.tpsSingle && !bot.singleBroken && tps > 240.f && bot.cfg.methodNow() != 2 && !bot.cfg.classicNow() &&
             !perStep() && !ivey::Renderer::get().active() && PlayLayer::get() && inPlay(this)) {
             // The list of hooks decides, not the "no sign of the hook" flag, which can be stale from a
             // time of warp use. If the hook does not really run, the check after the update catches it.
