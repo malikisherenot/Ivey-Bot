@@ -9,6 +9,12 @@ namespace ivey {
 
     enum class Mode { Idle, Record, Replay };
 
+    // Colours and corners of the overlay text.
+    inline constexpr char const* LABEL_COLOR_NAMES[] = {"White", "Cyan", "Green", "Yellow", "Orange", "Pink"};
+    inline constexpr unsigned char LABEL_COLORS[][3] = {{255, 255, 255}, {110, 220, 255}, {120, 255, 140}, {255, 235, 110}, {255, 170, 90}, {255, 140, 200}};
+    inline constexpr int LABEL_COLOR_COUNT = 6;
+    inline constexpr char const* LABEL_CORNER_NAMES[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
+
     struct Config {
         bool frameAccurate = true;
         bool correction = true;
@@ -43,6 +49,10 @@ namespace ivey {
         int  corrInterval = 4;
         int  tpsMethod = 0;          // above 240 TPS: 0 auto, 1 step size hook, 2 time warp
         bool tpsClassic = false;     // step loop copied from xdBot, for comparing
+        // The advanced TPS choices only count while developer mode is on, so a value left over
+        // from before cannot change the TPS without being seen.
+        int  methodNow() const { return devMode ? tpsMethod : 0; }
+        bool classicNow() const { return devMode && tpsClassic; }
         bool lightSteps = false;     // developer: skip PlayLayer::postUpdate on every step of a frame except the last
         bool tpsSingle = false;      // Android arm64: the game's own step loop makes all the steps of a frame in one update call
         int  stepBudget = 33; // ms of stepping allowed per screen frame
@@ -58,6 +68,12 @@ namespace ivey {
         bool lblMode = true;
         bool lblMacro = true;
         bool lblAccuracy = true;
+        int  lblScale = 100;         // size of the overlay text, percent
+        int  lblOpacity = 75;        // percent
+        int  lblCorner = 0;          // 0 top left, 1 top right, 2 bottom left, 3 bottom right
+        int  lblColor = 0;           // see LABEL_COLORS
+        int  lblX = 8;               // distance from the side
+        int  lblY = 8;               // distance from the top or bottom
         int  accent = 0;
         int  opacity = 1;
         bool tpsLog = false;         // developer mode: writes what the TPS code does to the Geode log

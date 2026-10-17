@@ -71,6 +71,12 @@ namespace ivey {
         lblMode       = m->getSavedValue<bool>("lbl-mode", true);
         lblMacro      = m->getSavedValue<bool>("lbl-macro", true);
         lblAccuracy   = m->getSavedValue<bool>("lbl-accuracy", true);
+        lblScale      = std::clamp(m->getSavedValue<int>("lbl-scale", 100), 50, 200);
+        lblOpacity    = std::clamp(m->getSavedValue<int>("lbl-opacity", 75), 10, 100);
+        lblCorner     = std::clamp(m->getSavedValue<int>("lbl-corner", 0), 0, 3);
+        lblColor      = std::clamp(m->getSavedValue<int>("lbl-color", 0), 0, LABEL_COLOR_COUNT - 1);
+        lblX          = std::clamp(m->getSavedValue<int>("lbl-x", 8), 0, 400);
+        lblY          = std::clamp(m->getSavedValue<int>("lbl-y", 8), 0, 300);
         accent        = m->getSavedValue<int>("accent", 0);
         opacity       = m->getSavedValue<int>("opacity", 1);
         fx            = m->getSavedValue<int>("window-fx", 0);
@@ -147,6 +153,12 @@ namespace ivey {
         m->setSavedValue("lbl-mode", lblMode);
         m->setSavedValue("lbl-macro", lblMacro);
         m->setSavedValue("lbl-accuracy", lblAccuracy);
+        m->setSavedValue("lbl-scale", lblScale);
+        m->setSavedValue("lbl-opacity", lblOpacity);
+        m->setSavedValue("lbl-corner", lblCorner);
+        m->setSavedValue("lbl-color", lblColor);
+        m->setSavedValue("lbl-x", lblX);
+        m->setSavedValue("lbl-y", lblY);
         m->setSavedValue("accent", accent);
         m->setSavedValue("opacity", opacity);
         m->setSavedValue("window-fx", fx);
