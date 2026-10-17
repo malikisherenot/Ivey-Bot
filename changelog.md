@@ -1,5 +1,12 @@
 # Ivey Bot Changelog
 
+## v1.21.0
+
+- Menu: dragging a side changes only that side (width for left/right, height for top/bottom), the bottom right corner changes both. The size is saved
+- Menu: rows scroll with a finger drag (with a glide and a scroll bar) instead of pages. A tap opens or toggles a row, a drag scrolls
+- Menu: opens and closes with a small grow and fade, rows slide in when a tab changes, check marks pop in, a pressed row lights up
+- Menu: gradient title bar, accent line under the title and an accent tinted border
+
 ## v1.20.3
 
 - The menu can be dragged from anywhere that is not a button, not only from the title bar
