@@ -1,5 +1,12 @@
 # Ivey Bot Changelog
 
+## v1.22.1
+
+- Menu: rounded corners. The window, its border and shadow are drawn as rounded shapes, and the colour effect, title bar and fade are cut to them
+- Menu: dragging a side is much lighter. Only the frame, the tabs and the box of the rows follow the finger, the rows are made again when it is lifted
+- Menu: the open and close animation is a little shorter
+- The menu button of the pause screen is in the list of mod buttons on the right (right-button-menu), like other bots. Without that list it stays in the corner
+
 ## v1.22.0
 
 - Auto Click is now the Pathfinder (Experimental)
