@@ -1,5 +1,14 @@
 # Ivey Bot Changelog
 
+## v1.22.0
+
+- Auto Click is now the Pathfinder (Experimental)
+- Pathfinder: looks over twice the look ahead, and skips the steps in which nothing can reach it (much less work per step)
+- Pathfinder: also tries a swift tap (hold for one step, then let go) and keeps the move that lives longest; a death on the very next step is always answered
+- Pathfinder: in a linked dual (one button for both players) both players are looked at together, in two player levels each player has its own decision. Player 1 and Player 2 can be turned off
+- Pathfinder: writes to the Geode log what it had seen when the player died
+- Trajectory simulation (and the Pathfinder) steps the way the game does, worked out from the TPS. Before, it used the size of the last step the player reported, which can be a part of a step and changed from moment to moment
+
 ## v1.21.0
 
 - Menu: dragging a side changes only that side (width for left/right, height for top/bottom), the bottom right corner changes both. The size is saved
