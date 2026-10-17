@@ -73,6 +73,9 @@ namespace ivey {
         void refreshRows();
         void saveWindow();
         void showEdges();
+        void drawFrame();     // shadow, border, window and the shapes that clip, for the current size
+        void drawBorder();    // only the border, for the moving rainbow
+        void layoutLight();   // cheap version of relayout, while a side is being dragged
         void buildFrame();    // the window itself: made once, and moved to the new size when it is resized
         void relayout();      // everything again, for a new width or height
         void closeAnimated();
@@ -99,7 +102,7 @@ namespace ivey {
         static IveyMenu* create();
 
         cocos2d::CCNode* m_root = nullptr;
-        cocos2d::extension::CCScale9Sprite* m_bg = nullptr;
+        cocos2d::CCDrawNode* m_bg = nullptr;
         ThemeFx* m_fx = nullptr;     // behind the buttons
         ThemeFx* m_fxTop = nullptr;  // over the buttons, much fainter
         cocos2d::CCLayerColor* m_tabLine = nullptr; // underline of the open tab, for the moving accent
@@ -110,8 +113,14 @@ namespace ivey {
         cocos2d::CCNode* m_chrome = nullptr;
         cocos2d::CCNode* m_over = nullptr;
         cocos2d::CCLayerColor* m_veil = nullptr;
-        cocos2d::extension::CCScale9Sprite* m_shadow = nullptr;
-        cocos2d::extension::CCScale9Sprite* m_border = nullptr;
+        cocos2d::CCDrawNode* m_shadow = nullptr;     // the window is drawn as rounded shapes
+        cocos2d::CCDrawNode* m_border = nullptr;
+        cocos2d::CCClippingNode* m_clipBack = nullptr; // keeps the colour effect and the title bar inside the rounded corners
+        cocos2d::CCDrawNode* m_stencilBack = nullptr;
+        cocos2d::CCClippingNode* m_clipTop = nullptr;
+        cocos2d::CCDrawNode* m_stencilTop = nullptr;
+        cocos2d::CCLayerColor* m_tabRule = nullptr;   // the thin line under the tabs
+        cocos2d::CCNode* m_closeItem = nullptr;
         cocos2d::CCLayerColor* m_titleBar = nullptr;
         cocos2d::CCLayerColor* m_titleLine = nullptr;
         cocos2d::CCLabelBMFont* m_title = nullptr;
@@ -132,6 +141,8 @@ namespace ivey {
         float m_wFrom = 0.f, m_hFrom = 0.f; // size when a side was grabbed
         float m_wTarget = 0.f, m_hTarget = 0.f; // size the drag has reached
         float m_scroll = 0.f, m_maxScroll = 0.f, m_viewH = 0.f, m_scrollVel = 0.f;
+        float m_builtViewH = 0.f, m_rowsTotal = 0.f; // height the rows were laid out for, and their total height
+        float m_tabsW = 0.f, m_tabsH = 0.f;          // size the tabs were laid out for
         bool m_scrolled = false, m_inertia = false;
         int m_scrollTab = -1;
         int m_pressRow = -1;

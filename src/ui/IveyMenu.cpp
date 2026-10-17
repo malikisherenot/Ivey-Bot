@@ -3,6 +3,7 @@
 #include "../bot/Bot.hpp"
 #include "../render/Renderer.hpp"
 #include <algorithm>
+#include <vector>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -69,6 +70,32 @@ namespace ivey {
             if (i == ACCENT_RAINBOW) return hueColor(g_rainbowHue);
             return ACCENTS[i];
         }
+
+        // Points of a rounded rectangle, counter clockwise, for CCDrawNode.
+        void roundedRect(std::vector<CCPoint>& pts, float x, float y, float w, float h, float r) {
+            pts.clear();
+            r = std::max(0.5f, std::min(r, std::min(w, h) / 2.f));
+            constexpr int SEG = 6;
+            constexpr float HALF_PI = 1.57079632679f;
+            auto arc = [&](float cx, float cy, float from) {
+                for (int i = 0; i <= SEG; ++i) {
+                    float a = from + HALF_PI * static_cast<float>(i) / static_cast<float>(SEG);
+                    pts.push_back({cx + r * std::cos(a), cy + r * std::sin(a)});
+                }
+            };
+            arc(x + w - r, y + r, -HALF_PI);
+            arc(x + w - r, y + h - r, 0.f);
+            arc(x + r, y + h - r, HALF_PI);
+            arc(x + r, y + r, 2.f * HALF_PI);
+        }
+
+        void fillRounded(CCDrawNode* node, float x, float y, float w, float h, float r, ccColor4F color) {
+            static std::vector<CCPoint> pts;
+            roundedRect(pts, x, y, w, h, r);
+            node->drawPolygon(pts.data(), static_cast<unsigned int>(pts.size()), color, 0.5f, color);
+        }
+
+        constexpr float CORNER = 9.f; // radius of the window corners
 
         // Draws its children only inside its own rectangle.
         class ClipNode : public CCNode {
@@ -679,7 +706,7 @@ namespace ivey {
         if (cp.x < 0.f || cp.x > W || cp.y < 0.f || cp.y > m_viewH) return -1;
 
         auto lp = m_list->convertToNodeSpace(world);
-        int i = static_cast<int>(std::floor((m_viewH - lp.y) / ROW_H));
+        int i = static_cast<int>(std::floor((m_builtViewH - lp.y) / ROW_H));
         if (i < 0 || i >= static_cast<int>(m_rows.size())) return -2;
 
         auto& row = m_rows[static_cast<size_t>(i)];
@@ -692,7 +719,7 @@ namespace ivey {
         if (!m_list || row < 0) return;
         auto accent = accentColor();
         float rowW = W - 44.f;
-        float y = m_viewH - ROW_H / 2.f - static_cast<float>(row) * ROW_H;
+        float y = m_builtViewH - ROW_H / 2.f - static_cast<float>(row) * ROW_H;
         m_press = CCLayerColor::create({accent.r, accent.g, accent.b, 0}, rowW, ROW_H - 2.f);
         m_press->setPosition({10.f, y - (ROW_H - 2.f) / 2.f});
         m_list->addChild(m_press, -1);
@@ -708,7 +735,7 @@ namespace ivey {
 
     void IveyMenu::setScroll(float y) {
         m_scroll = std::clamp(y, 0.f, m_maxScroll);
-        if (m_list) m_list->setPositionY(m_scroll);
+        if (m_list) m_list->setPositionY(m_scroll + (m_viewH - m_builtViewH)); // the rows are laid out from the top
         updateScrollBar();
     }
 
@@ -803,10 +830,10 @@ namespace ivey {
             float y = (m_sides & 8) ? m_rootFrom.y + (m_hFrom - nh) * m_scale : m_rootFrom.y;
             m_root->setPosition(x, y);
 
-            if (std::abs(nw - W) >= 2.f || std::abs(nh - H) >= 2.f) {
+            if (nw != W || nh != H) {
                 W = nw;
                 H = nh;
-                relayout();
+                layoutLight();
             }
             showEdges(); // the rainbow accent keeps moving
         }
@@ -967,6 +994,34 @@ namespace ivey {
         return true;
     }
 
+    void IveyMenu::drawBorder() {
+        if (!m_border) return;
+        auto edge = dimAccent(accentColor());
+        m_border->clear();
+        fillRounded(m_border, -1.f, -1.f, W + 2.f, H + 2.f, CORNER + 1.f, ccc4f(edge.r / 255.f, edge.g / 255.f, edge.b / 255.f, 1.f));
+    }
+
+    // Shadow, border, window and the two shapes that cut other things to the rounded corners.
+    void IveyMenu::drawFrame() {
+        if (!m_bg) return;
+        m_shadow->clear();
+        for (int i = 1; i <= 3; ++i) {
+            float f = static_cast<float>(i);
+            fillRounded(m_shadow, -f, -f - 1.5f, W + 2.f * f, H + 2.f * f, CORNER + f, ccc4f(0.f, 0.f, 0.f, 0.12f));
+        }
+
+        drawBorder();
+
+        float alpha = static_cast<float>(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]) / 255.f;
+        m_bg->clear();
+        fillRounded(m_bg, 0.f, 0.f, W, H, CORNER, ccc4f(20.f / 255.f, 20.f / 255.f, 20.f / 255.f, alpha));
+
+        m_stencilBack->clear();
+        fillRounded(m_stencilBack, 0.5f, 0.5f, W - 1.f, H - 1.f, CORNER - 0.5f, ccc4f(1.f, 1.f, 1.f, 1.f));
+        m_stencilTop->clear();
+        fillRounded(m_stencilTop, 0.5f, 0.5f, W - 1.f, H - 1.f, CORNER - 0.5f, ccc4f(1.f, 1.f, 1.f, 1.f));
+    }
+
     // The window itself. Made the first time, and moved to the new size every time after, so nothing
     // heavy (the colour effect) is made again while a side is dragged.
     void IveyMenu::buildFrame() {
@@ -977,33 +1032,37 @@ namespace ivey {
         bool first = m_bg == nullptr;
 
         if (first) {
-            // soft shadow, thin border, then the window itself
-            m_shadow = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
-            m_shadow->setAnchorPoint({0.f, 0.f});
-            m_shadow->setColor({0, 0, 0});
-            m_shadow->setOpacity(90);
+            // soft shadow, thin border, then the window itself, all as rounded shapes
+            ccBlendFunc blend;
+            blend.src = GL_SRC_ALPHA;
+            blend.dst = GL_ONE_MINUS_SRC_ALPHA;
+
+            m_shadow = CCDrawNode::create();
+            m_shadow->setBlendFunc(blend);
             m_back->addChild(m_shadow);
 
-            m_border = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
-            m_border->setAnchorPoint({0.f, 0.f});
-            m_border->setColor(dimAccent(accentColor()));
-            m_border->setOpacity(255);
+            m_border = CCDrawNode::create();
+            m_border->setBlendFunc(blend);
             m_back->addChild(m_border);
 
-            m_bg = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
-            m_bg->setAnchorPoint({0.f, 0.f});
-            m_bg->setColor({20, 20, 20});
+            m_bg = CCDrawNode::create();
+            m_bg->setBlendFunc(blend);
             m_back->addChild(m_bg);
+
+            // what is drawn over the window is cut to the rounded corners
+            m_stencilBack = CCDrawNode::create();
+            m_clipBack = CCClippingNode::create(m_stencilBack);
+            m_back->addChild(m_clipBack);
 
             // animated colour layer, shown when a Window Effect is chosen
             m_fx = ThemeFx::create({W - 6.f, H - 6.f});
             m_fx->setPosition({3.f, 3.f});
-            m_back->addChild(m_fx);
+            m_clipBack->addChild(m_fx);
 
             m_titleBar = CCLayerGradient::create({52, 52, 52, 255}, {32, 32, 32, 255});
-            m_back->addChild(m_titleBar);
+            m_clipBack->addChild(m_titleBar);
             m_titleLine = CCLayerColor::create({accentColor().r, accentColor().g, accentColor().b, 255}, W - 8.f, 1.f);
-            m_back->addChild(m_titleLine);
+            m_clipBack->addChild(m_titleLine);
 
             m_title = CCLabelBMFont::create("Ivey Bot", fontName().c_str());
             styleText(m_title, 0.45f);
@@ -1023,28 +1082,28 @@ namespace ivey {
             m_status->setColor({150, 150, 150});
             m_chrome->addChild(m_status, 2);
 
+            m_stencilTop = CCDrawNode::create();
+            m_clipTop = CCClippingNode::create(m_stencilTop);
+            m_over->addChild(m_clipTop);
+
             // the same effect again, over the buttons and text, but much fainter
             m_fxTop = ThemeFx::create({W - 6.f, H - 6.f});
             m_fxTop->setAlphaScale(static_cast<float>(Bot::get().cfg.fxTopPct) / 100.f);
-            m_over->addChild(m_fxTop);
+            m_clipTop->addChild(m_fxTop);
 
             // strips along the four sides, only visible while that side is dragged
             for (int i = 0; i < 4; ++i) {
                 auto strip = CCLayerColor::create({255, 255, 255, 235}, 3.f, 3.f);
                 strip->setVisible(false);
-                m_over->addChild(strip, 100);
+                m_clipTop->addChild(strip, 100);
                 m_edge[i] = strip;
             }
 
             m_veil = CCLayerColor::create({0, 0, 0, 255}, W, H);
-            m_over->addChild(m_veil, 200);
+            m_clipTop->addChild(m_veil, 200);
         }
 
-        m_shadow->setContentSize({W + 8.f, H + 8.f});
-        m_shadow->setPosition({-4.f, -6.f});
-        m_border->setContentSize({W + 2.f, H + 2.f});
-        m_border->setPosition({-1.f, -1.f});
-        m_bg->setContentSize({W, H});
+        drawFrame();
         m_fx->resize({W - 6.f, H - 6.f});
         m_fx->setPosition({3.f, 3.f});
         m_fxTop->resize({W - 6.f, H - 6.f});
@@ -1057,8 +1116,10 @@ namespace ivey {
         m_title->setPosition({W / 2.f, H - TITLE_H / 2.f - 2.f});
 
         m_grip->clear();
-        CCPoint tri[3] = {{W - 5.f, 5.f}, {W - 5.f, 19.f}, {W - 19.f, 5.f}};
-        m_grip->drawPolygon(tri, 3, ccc4f(0.45f, 0.45f, 0.45f, 1.f), 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
+        for (int i = 0; i < 3; ++i) {
+            float o = 6.f + 4.f * static_cast<float>(i);
+            m_grip->drawSegment({W - 5.f, 5.f + o}, {W - 5.f - o, 5.f}, 0.6f, ccc4f(0.50f, 0.50f, 0.50f, 0.9f));
+        }
 
         m_statusLine->setContentSize({W - 40.f, 1.f});
         m_statusLine->setPosition({10.f, 22.f});
@@ -1069,6 +1130,26 @@ namespace ivey {
             m_edge[i]->setPosition({i == 1 ? W - 3.f : 0.f, i == 2 ? H - 3.f : 0.f});
         }
         m_veil->setContentSize({W, H});
+    }
+
+    // While a side is dragged: only the frame, the tabs and the box of the rows follow the size. The rows
+    // themselves are made again when the finger is lifted, so nothing heavy happens on every move.
+    void IveyMenu::layoutLight() {
+        buildFrame();
+
+        if (std::abs(W - m_tabsW) >= 8.f) rebuildTabs(); // the tabs may wrap differently now
+        float shift = H - m_tabsH;
+        m_tabMenu->setPositionY(shift);
+        m_tabDeco->setPositionY(shift);
+        if (m_closeItem) m_closeItem->setPositionX(W - 18.f);
+        if (m_tabRule) m_tabRule->setContentSize({W - 16.f, 1.f});
+
+        float top = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f;
+        if (m_tab == TAB_SEARCH) top -= 24.f;
+        m_viewH = std::max(ROW_H, top - FOOTER);
+        m_maxScroll = std::max(0.f, m_rowsTotal - m_viewH);
+        if (m_clip) m_clip->setContentSize({W, m_viewH});
+        setScroll(m_scroll);
     }
 
     // Everything again for a new width or height.
@@ -1083,9 +1164,8 @@ namespace ivey {
     }
 
     void IveyMenu::applyTheme() {
-        m_bg->setOpacity(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]);
         auto& cfg = Bot::get().cfg;
-        if (m_border) m_border->setColor(dimAccent(accentColor()));
+        drawFrame(); // the opacity and the accent colour of the border
         if (m_titleLine) m_titleLine->setColor(accentColor());
         int fx = std::clamp(cfg.fx, 0, ThemeFx::count(Bot::get().cfg.devMode) - 1);
         if (m_fx) m_fx->setEffect(fx, accentColor());
@@ -1098,7 +1178,7 @@ namespace ivey {
     // Runs every frame: the open and close animation, the scroll glide, and the moving rainbow accent.
     void IveyMenu::update(float dt) {
         if (m_animDir != 0) {
-            m_anim = std::clamp(m_anim + static_cast<float>(m_animDir) * dt / 0.18f, 0.f, 1.f);
+            m_anim = std::clamp(m_anim + static_cast<float>(m_animDir) * dt / 0.14f, 0.f, 1.f);
             float inv = 1.f - m_anim;
             float e = 1.f - inv * inv * inv;
             if (m_body) m_body->setScale(0.94f + 0.06f * e);
@@ -1144,7 +1224,7 @@ namespace ivey {
 
         if (m_tabLine) m_tabLine->setColor(accent);
         if (m_titleLine) m_titleLine->setColor(accent);
-        if (m_border) m_border->setColor(dimAccent(accent));
+        drawBorder();
         if (m_scrollBar) m_scrollBar->setColor(accent);
         if (m_fx) m_fx->setAccent(accent);
         if (m_fxTop) m_fxTop->setAccent(accent);
@@ -1226,7 +1306,11 @@ namespace ivey {
     void IveyMenu::rebuildTabs() {
         m_tabMenu->removeAllChildrenWithCleanup(true);
         m_tabDeco->removeAllChildrenWithCleanup(true);
+        m_tabMenu->setPosition({0.f, 0.f}); // a drag may have moved them, they are laid out for the size now
+        m_tabDeco->setPosition({0.f, 0.f});
         m_tabLine = nullptr;
+        m_tabRule = nullptr;
+        m_closeItem = nullptr;
 
         float x = 8.f;
         int row = 0;
@@ -1300,6 +1384,7 @@ namespace ivey {
         auto line = CCLayerColor::create({58, 58, 58, 255}, W - 16.f, 1.f);
         line->setPosition({8.f, lineY});
         m_tabDeco->addChild(line);
+        m_tabRule = line;
 
         // close button
         auto closeNode = CCNode::create();
@@ -1313,6 +1398,9 @@ namespace ivey {
         auto closeItem = CCMenuItemSpriteExtra::create(closeNode, nullptr, this, menu_selector(IveyMenu::onClose));
         closeItem->setPosition({W - 18.f, H - TITLE_H / 2.f - 2.f});
         m_tabMenu->addChild(closeItem);
+        m_closeItem = closeItem;
+        m_tabsW = W;
+        m_tabsH = H;
     }
 
     void IveyMenu::rebuild() {
@@ -1350,6 +1438,8 @@ namespace ivey {
         // All rows are in one list that scrolls inside a box above the status line.
         m_viewH = std::max(ROW_H, top - FOOTER);
         float total = static_cast<float>(m_rows.size()) * ROW_H;
+        m_builtViewH = m_viewH;
+        m_rowsTotal = total;
         m_maxScroll = std::max(0.f, total - m_viewH);
         m_scroll = std::clamp(m_scroll, 0.f, m_maxScroll);
 
