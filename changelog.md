@@ -1,5 +1,14 @@
 # Ivey Bot Changelog
 
+## v1.23.0
+
+- Font: the menu and overlay use Roboto (the font Echo uses) instead of Abel. Delete resources/Abel-Regular.ttf and Abel-OFL.txt, add resources/Roboto-Medium.ttf and Roboto-NOTICE.txt
+- Labels: size, opacity, corner, colour and distance from the sides can be set (Visual tab)
+- TPS Method, Classic TPS Loop, Step Budget, Max time per frame and Check every (frames) are developer-only. They only count while developer mode is on, and the step hook is the default
+- Assist tab: a line between every option
+- Bot and Macro are the first tabs, and the menu opens on Bot
+- The TPS hooks (update and getModifiedDelta) ask for the lowest priority number there is, to run ahead of Echo and Silicate
+
 ## v1.22.1
 
 - Menu: rounded corners. The window, its border and shadow are drawn as rounded shapes, and the colour effect, title bar and fade are cut to them
