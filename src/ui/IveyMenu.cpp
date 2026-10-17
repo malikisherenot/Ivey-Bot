@@ -453,15 +453,17 @@ namespace ivey {
                                  Bot::get().status = fmt::format("Prevent Death looks {} frames ahead", cfg.preventFrames);
                              });
 
-                    check("Auto Click", c.autoClick, nullptr,
-                          [] { return fmt::format("{}f", Bot::get().cfg.autoFrames); });
-                    editable("Auto Click Look Ahead", [] { return std::to_string(Bot::get().cfg.autoFrames); }, 4, 120,
+                    check("Pathfinder (Experimental)", c.pathfinder, nullptr,
+                          [] { return fmt::format("{}f", Bot::get().cfg.pathFrames); });
+                    editable("Pathfinder Look Ahead", [] { return std::to_string(Bot::get().cfg.pathFrames); }, 4, 120,
                              [](double v) {
                                  auto& cfg = Bot::get().cfg;
-                                 cfg.autoFrames = static_cast<int>(std::lround(v));
+                                 cfg.pathFrames = static_cast<int>(std::lround(v));
                                  cfg.save();
-                                 Bot::get().status = fmt::format("Auto Click looks {} frames ahead", cfg.autoFrames);
+                                 Bot::get().status = fmt::format("Pathfinder looks {} steps ahead", cfg.pathFrames);
                              });
+                    check("Pathfinder Player 1", c.pathP1);
+                    check("Pathfinder Player 2", c.pathP2);
 
                     check("Show Hitboxes", c.hitboxes);
                     check("Hitbox Trail", c.hitboxTrail);
