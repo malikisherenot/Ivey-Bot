@@ -287,7 +287,7 @@ namespace {
     // is stepped one step at a time for them, even at 240 TPS.
     bool perStep() {
         auto& cfg = Bot::get().cfg;
-        return cfg.preventDeath || cfg.hitboxTrail || cfg.autoClick;
+        return cfg.preventDeath || cfg.hitboxTrail || cfg.pathfinder;
     }
 
     // Above 240 TPS the game only takes smaller steps through its step-size function. On a device where
@@ -957,6 +957,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // TPS bypass: this follows xdBot's TPS bypass (Zilko & Camellia).
         // The game layer is stepped in slices of 1 / TPS and leftover time is carried over.
         float tps = activeTps();
+        bot.simTps = tps; // the trajectory simulation steps the same way the game does
         bool editorStepping = editorReplay(this);
         if ((tps == 240.f && !perStep()) || !(PlayLayer::get() || editorStepping)) {
             GJBaseGameLayer::update(dt);
@@ -1120,9 +1121,9 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 break;
             }
 
-            // Auto Click: decides hold or release for the coming step by trying both on a copy of the player.
-            if (bot.cfg.autoClick && bot.mode != Mode::Replay && !ivey::Renderer::get().active() && inPlay(this)) {
-                if (ivey::Assist::autoClick(PlayLayer::get(), bot.cfg.autoFrames)) bot.safeMode = true; // a bot clicked, the run does not count
+            // Pathfinder: decides the button for the coming step by trying inputs on a copy of the player.
+            if (bot.cfg.pathfinder && bot.mode != Mode::Replay && !ivey::Renderer::get().active() && inPlay(this)) {
+                if (ivey::Assist::pathfinder(PlayLayer::get(), bot.cfg.pathFrames)) bot.safeMode = true; // a bot clicked, the run does not count
             }
 
             double beforeCall = m_gameState.m_levelTime;
