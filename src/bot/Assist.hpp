@@ -11,10 +11,18 @@ namespace ivey {
         // `who` gets the player (0 or 1).
         int deathIn(PlayLayer* pl, int frames, int* who);
 
-        // Auto Click: for each player, tries keeping the button as it is and changing it on a copy of the player.
-        // If keeping it leads to a death and changing it lives longer, the button is changed on the real player.
+        // Pathfinder (experimental). Called before every physics step. For each button it tries, on a copy of
+        // the player, keeping the input, flipping it, and a swift tap (hold for one step). It acts when a death
+        // is inside the look ahead and another move lives longer (or the death is the very next step).
+        // The look is done over twice the look ahead, and steps in which nothing can reach it are skipped.
         // Returns true if it pressed or released something.
-        bool autoClick(PlayLayer* pl, int frames);
+        bool pathfinder(PlayLayer* pl, int ahead);
+
+        // A new attempt starts: forget what was decided.
+        void pathfinderReset();
+
+        // The real player died: writes to the Geode log what the Pathfinder had seen, to find out why.
+        void pathfinderDied(PlayLayer* pl, PlayerObject* player);
 
         // Draws the hitboxes of everything near the screen. Called once per screen frame.
         void drawHitboxes(PlayLayer* pl);

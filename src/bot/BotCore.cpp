@@ -35,8 +35,10 @@ namespace ivey {
         trajectoryRelease = m->getSavedValue<bool>("trajectory-release", true);
         preventDeath  = m->getSavedValue<bool>("prevent-death", false);
         preventFrames = m->getSavedValue<int>("prevent-frames", 3);
-        autoClick     = m->getSavedValue<bool>("auto-click", false);
-        autoFrames    = m->getSavedValue<int>("auto-frames", 24);
+        pathfinder    = m->getSavedValue<bool>("auto-click", false); // still saved under the old name, so the setting stays
+        pathFrames    = m->getSavedValue<int>("auto-frames", 24);
+        pathP1        = m->getSavedValue<bool>("path-p1", true);
+        pathP2        = m->getSavedValue<bool>("path-p2", true);
         hitboxes      = m->getSavedValue<bool>("hitboxes", false);
         hitboxTrail   = m->getSavedValue<bool>("hitbox-trail", false);
         swift         = m->getSavedValue<bool>("swift", false);
@@ -83,7 +85,7 @@ namespace ivey {
         if (corrInterval < 1 || corrInterval > 10000) corrInterval = 4;
         if (trajectoryLength < 2 || trajectoryLength > 2000) trajectoryLength = 500;
         if (preventFrames < 1 || preventFrames > 30) preventFrames = 3;
-        if (autoFrames < 4 || autoFrames > 120) autoFrames = 24;
+        if (pathFrames < 4 || pathFrames > 120) pathFrames = 24;
         if (swiftClicks < 1 || swiftClicks > 100) swiftClicks = 2;
         if (renderWidth < 16 || renderWidth > 16384) renderWidth = 1920;
         if (renderHeight < 16 || renderHeight > 16384) renderHeight = 1080;
@@ -111,8 +113,10 @@ namespace ivey {
         m->setSavedValue("trajectory-release", trajectoryRelease);
         m->setSavedValue("prevent-death", preventDeath);
         m->setSavedValue("prevent-frames", preventFrames);
-        m->setSavedValue("auto-click", autoClick);
-        m->setSavedValue("auto-frames", autoFrames);
+        m->setSavedValue("auto-click", pathfinder);
+        m->setSavedValue("auto-frames", pathFrames);
+        m->setSavedValue("path-p1", pathP1);
+        m->setSavedValue("path-p2", pathP2);
         m->setSavedValue("hitboxes", hitboxes);
         m->setSavedValue("hitbox-trail", hitboxTrail);
         m->setSavedValue("swift", swift);

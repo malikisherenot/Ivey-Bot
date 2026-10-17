@@ -68,32 +68,153 @@ namespace ivey::Assist {
         return false;
     }
 
-    bool autoClick(PlayLayer* pl, int frames) {
+    namespace {
+        constexpr int NONE = INT_MAX; // no death inside the look
+        constexpr auto JUMP = static_cast<PlayerButton>(1);
+
+        // What the Pathfinder remembers during one attempt.
+        struct PathState {
+            int skip = 0;                      // steps that need no look: nothing can reach the look ahead before then
+            bool release[2] = {false, false};  // a swift tap is on: let go on the next step
+            bool held[2] = {false, false};     // the button as it was after the last decision
+            int lastLife = NONE;               // steps to death with the input as it was, at the last look
+            int checks = 0, flips = 0, swifts = 0, skipped = 0;
+        };
+        PathState s_path;
+
+        enum class Move { Keep, Flip, Swift };
+
+        // Steps until the first death of the players one button controls if the button does `move`
+        // (a swift is: hold for this step, let go on the next one).
+        int lifeOfMove(PlayLayer* pl, bool linked, int controller, bool holding, Move move, int horizon) {
+            auto& t = Trajectory::get();
+            int worst = NONE;
+            int first = linked ? 0 : controller;
+            int last = linked ? 1 : controller;
+            for (int p = first; p <= last; ++p) {
+                PlayerObject* real = p == 0 ? pl->m_player1 : pl->m_player2;
+                PlayerObject* copy = t.copyFor(p);
+                if (!real || !copy || real->m_isDead) continue;
+
+                bool wantHold = move == Move::Keep ? holding : (move == Move::Flip ? !holding : true);
+                bool tap = move == Move::Swift;
+                Path path = t.simulate(pl, real, copy, horizon, [wantHold, tap](int step, PlayerObject* c) {
+                    if (step == 0) {
+                        if (wantHold) c->pushButton(JUMP);
+                        else c->releaseButton(JUMP);
+                    }
+                    else if (step == 1 && tap) {
+                        c->releaseButton(JUMP);
+                    }
+                });
+                if (path.died) worst = std::min(worst, path.deathFrame);
+            }
+            return worst;
+        }
+    }
+
+    void pathfinderReset() {
+        s_path = PathState();
+    }
+
+    bool pathfinder(PlayLayer* pl, int ahead) {
         auto& t = Trajectory::get();
-        if (!pl || frames <= 0 || t.creating()) return false;
+        auto& cfg = Bot::get().cfg;
+        if (!pl || ahead <= 0 || t.creating()) return false;
         if (!pl->m_player1 || pl->m_player1->m_isDead || !pl->m_levelSettings) return false;
         if (pl->m_levelSettings->m_platformerMode) return false; // left and right are not decided here
 
-        bool clicked = false;
+        bool twoPlayer = pl->m_levelSettings->m_twoPlayerMode;
         bool dual = pl->m_gameState.m_isDualMode && pl->m_player2;
-        for (int p = 0; p < (dual ? 2 : 1); ++p) {
-            PlayerObject* real = p == 0 ? pl->m_player1 : pl->m_player2;
-            PlayerObject* copy = t.copyFor(p);
-            if (!real || !copy || real->m_isDead) continue;
+        bool linked = dual && !twoPlayer; // one button drives both players
+        int controllers = (dual && twoPlayer) ? 2 : 1;
 
-            bool holding = real->m_jumpBuffered;
-            Path keep = holding ? t.simulateHold(pl, real, copy, frames) : t.simulateRelease(pl, real, copy, frames);
-            if (!keep.died) continue; // fine as it is, nothing to do
-
-            Path change = holding ? t.simulateRelease(pl, real, copy, frames) : t.simulateHold(pl, real, copy, frames);
-            int keepLife = keep.deathFrame;
-            int changeLife = change.died ? change.deathFrame : INT_MAX;
-            if (changeLife > keepLife) {
-                pl->handleButton(!holding, 1, p == 0);
-                clicked = true;
-            }
+        // A swift tap that was started on the last step ends now.
+        bool acted = false;
+        for (int c = 0; c < controllers; ++c) {
+            if (!s_path.release[c]) continue;
+            s_path.release[c] = false;
+            pl->handleButton(false, 1, c == 0);
+            s_path.held[c] = false;
+            acted = true;
         }
-        return clicked;
+        if (acted) {
+            s_path.skip = 0;
+            return true;
+        }
+
+        // Nothing changed from outside and nothing can reach the look ahead yet: no need to look this step.
+        if (s_path.skip > 0) {
+            bool same = true;
+            for (int c = 0; c < controllers; ++c) {
+                PlayerObject* real = c == 0 ? pl->m_player1 : pl->m_player2;
+                if (real && real->m_jumpBuffered != s_path.held[c]) same = false;
+            }
+            if (same) {
+                --s_path.skip;
+                ++s_path.skipped;
+                return false;
+            }
+            s_path.skip = 0;
+        }
+
+        ++s_path.checks;
+        int horizon = ahead * 2; // the first half decides, the second half tells how long the next look can wait
+        int skip = NONE;
+        int worstKeep = NONE;
+
+        for (int c = 0; c < controllers; ++c) {
+            PlayerObject* real = c == 0 ? pl->m_player1 : pl->m_player2;
+            if (!real || real->m_isDead) continue;
+            bool holding = real->m_jumpBuffered;
+            s_path.held[c] = holding;
+            if (!(c == 0 ? cfg.pathP1 : cfg.pathP2)) continue;
+
+            int keep = lifeOfMove(pl, linked, c, holding, Move::Keep, horizon);
+            worstKeep = std::min(worstKeep, keep);
+
+            if (keep >= ahead) {
+                // No death inside the look ahead. The next look can wait until one could come into it.
+                skip = std::min(skip, keep == NONE ? ahead : keep - ahead);
+                continue;
+            }
+
+            int flip = lifeOfMove(pl, linked, c, holding, Move::Flip, horizon);
+            int swift = holding ? -1 : lifeOfMove(pl, linked, c, holding, Move::Swift, horizon);
+            int best = std::max(flip, swift);
+            bool imminent = keep <= 1; // the very next step kills: nothing to lose by trying
+
+            if (best > keep || (imminent && best >= keep)) {
+                if (swift > flip) {
+                    pl->handleButton(true, 1, c == 0);
+                    s_path.release[c] = true;
+                    s_path.held[c] = true;
+                    ++s_path.swifts;
+                }
+                else {
+                    pl->handleButton(!holding, 1, c == 0);
+                    s_path.held[c] = !holding;
+                    ++s_path.flips;
+                }
+                acted = true;
+            }
+            skip = 0; // a death is close: look again on the next step
+        }
+
+        s_path.lastLife = worstKeep;
+        s_path.skip = (acted || skip == NONE) ? 0 : std::max(0, skip);
+        return acted;
+    }
+
+    void pathfinderDied(PlayLayer* pl, PlayerObject* player) {
+        auto& bot = Bot::get();
+        if (!bot.cfg.pathfinder || !pl || !player) return;
+
+        std::string seen = s_path.lastLife == NONE ? std::string("no death") : fmt::format("a death in {} steps", s_path.lastLife);
+        log::info("Pathfinder: died at x {:.0f}, {:.2f}s into the attempt. Last look saw {} (look ahead {}). "
+                  "{} looks, {} steps skipped, {} flips, {} swifts. Step {:.4f} ({:.0f} TPS)",
+                  player->getPositionX(), pl->m_gameState.m_levelTime, seen, bot.cfg.pathFrames,
+                  s_path.checks, s_path.skipped, s_path.flips, s_path.swifts, 60.f / std::max(bot.simTps, 1.f), bot.simTps);
     }
 
     int deathIn(PlayLayer* pl, int frames, int* who) {

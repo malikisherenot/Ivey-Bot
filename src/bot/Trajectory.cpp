@@ -1,5 +1,6 @@
 #include "Trajectory.hpp"
 #include "Bot.hpp"
+#include "Assist.hpp"
 #include "../render/Renderer.hpp"
 
 #include <Geode/modify/EffectGameObject.hpp>
@@ -74,6 +75,11 @@ namespace ivey {
         m_creating = true;
         m_cancel = false;
 
+        // The copy takes the same size of step the game takes. The step the real player reports can be
+        // a part of a step (the game splits some of them), so it is worked out from the TPS instead.
+        float simTps = Bot::get().simTps;
+        float step = simTps >= 1.f ? 60.f / simTps : delta;
+
         // The copy starts exactly where the real player is, like loading a checkpoint.
         real->saveToCheckpoint(m_checkpoint);
         copy->loadFromCheckpoint(m_checkpoint);
@@ -86,7 +92,7 @@ namespace ivey {
             copy->m_collisionLogLeft->removeAllObjects();
             copy->m_collisionLogRight->removeAllObjects();
 
-            pl->checkCollisions(copy, delta, false);
+            pl->checkCollisions(copy, step, false);
 
             if (m_cancel) {
                 copy->updatePlayerScale();
@@ -98,8 +104,8 @@ namespace ivey {
 
             if (onStep) onStep(i, copy);
 
-            copy->update(delta);
-            copy->updateRotation(delta);
+            copy->update(step);
+            copy->updateRotation(step);
             copy->updatePlayerScale();
         }
 
@@ -270,7 +276,13 @@ class $modify(IveyTrajectoryLayer, PlayLayer) {
             t.onCopyDied();
             return;
         }
+        ivey::Assist::pathfinderDied(this, player); // only writes to the log
         PlayLayer::destroyPlayer(player, object);
+    }
+
+    void resetLevel() {
+        PlayLayer::resetLevel();
+        ivey::Assist::pathfinderReset();
     }
 
     void onQuit() {

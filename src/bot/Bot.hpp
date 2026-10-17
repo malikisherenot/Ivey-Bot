@@ -24,8 +24,10 @@ namespace ivey {
         bool trajectoryRelease = true;
         bool preventDeath = false;   // pauses before a death
         int  preventFrames = 3;      // how many steps ahead it looks
-        bool autoClick = false;      // clicks by itself: tries hold and release on a copy of the player, keeps the one that lives
-        int  autoFrames = 24;        // how many steps ahead Auto Click looks
+        bool pathfinder = false;     // Pathfinder (experimental): clicks by itself, tries inputs on a copy of the player and keeps the one that lives
+        int  pathFrames = 24;        // how many steps ahead the Pathfinder looks
+        bool pathP1 = true;          // the Pathfinder may press for player 1
+        bool pathP2 = true;          // and for player 2 (in two player levels, in a linked dual it is one button)
         bool hitboxes = false;
         bool hitboxTrail = false;
         bool swift = false;
@@ -103,6 +105,7 @@ namespace ivey {
         std::string hookInfo;
         std::string otherMods;            // other enabled mods that hook the game's step function             // how many hooks the mod has, for developer mode            // is the step-size hook installed and on (checked once)
         unsigned long long stepCalls = 0; // physics steps made so far (for the Steps/s readout)
+        float simTps = 240.f;             // steps per second the game runs at now, the trajectory simulation steps the same way
         bool singleActive = false;        // single-update TPS: the step-size hook answers for the batch that is running
         bool singleBroken = false;        // it did not work on this device, the normal loop is used instead
         int singleCount = 1;              // steps in the batch
