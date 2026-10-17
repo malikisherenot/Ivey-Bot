@@ -10,6 +10,7 @@ namespace ivey {
         static ThemeFx* create(cocos2d::CCSize size);
         void setEffect(int effect, cocos2d::ccColor3B accent);
         void setAccent(cocos2d::ccColor3B accent); // only the colour, for an accent that moves
+        void resize(cocos2d::CCSize size);          // the window changed size
         void setAlphaScale(float scale);           // 1 = full, lower = fainter (the layer over the buttons)
         static int count(bool dev = false); // developer mode has two more effects
         static char const* name(int effect);

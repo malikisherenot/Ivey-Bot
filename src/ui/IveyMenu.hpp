@@ -73,14 +73,23 @@ namespace ivey {
         void refreshRows();
         void saveWindow();
         void showEdges();
+        void buildFrame();    // the window itself: made once, and moved to the new size when it is resized
+        void relayout();      // everything again, for a new width or height
+        void closeAnimated();
+        void setScroll(float y);
+        void updateScrollBar();
+        void showPress(int row);
+        void clearPress();
+        int rowAt(cocos2d::CCPoint world, bool& onArrow) const;
         std::string structureKey() const;
         void openEditor(size_t row);
         void closeEditor();
         void showSearch(bool show);
 
         void onTab(cocos2d::CCObject* sender);
-        void onRow(cocos2d::CCObject* sender);
-        void onArrow(cocos2d::CCObject* sender);
+        void activateRow(size_t row);
+        void activateArrow(size_t row);
+        void finishClose(float dt);
         void onClose(cocos2d::CCObject* sender);
         void onEditSet(cocos2d::CCObject* sender);
         void onEditCancel(cocos2d::CCObject* sender);
@@ -96,7 +105,22 @@ namespace ivey {
         cocos2d::CCLayerColor* m_tabLine = nullptr; // underline of the open tab, for the moving accent
         float m_rainbowClock = 0.f;
         cocos2d::CCMenu* m_tabMenu = nullptr;
-        cocos2d::CCMenu* m_content = nullptr;
+        cocos2d::CCNode* m_body = nullptr;    // everything of the window, scaled as one for the open and close animation
+        cocos2d::CCNode* m_back = nullptr;
+        cocos2d::CCNode* m_chrome = nullptr;
+        cocos2d::CCNode* m_over = nullptr;
+        cocos2d::CCLayerColor* m_veil = nullptr;
+        cocos2d::extension::CCScale9Sprite* m_shadow = nullptr;
+        cocos2d::extension::CCScale9Sprite* m_border = nullptr;
+        cocos2d::CCLayerColor* m_titleBar = nullptr;
+        cocos2d::CCLayerColor* m_titleLine = nullptr;
+        cocos2d::CCLabelBMFont* m_title = nullptr;
+        cocos2d::CCDrawNode* m_grip = nullptr;
+        cocos2d::CCLayerColor* m_statusLine = nullptr;
+        cocos2d::CCNode* m_clip = nullptr;    // the rows are only drawn inside this
+        cocos2d::CCNode* m_list = nullptr;    // all rows, moved up and down to scroll
+        cocos2d::CCLayerColor* m_scrollBar = nullptr;
+        cocos2d::CCLayerColor* m_press = nullptr;
         cocos2d::CCLabelBMFont* m_status = nullptr;
 
         std::vector<MenuRow> m_rows;
@@ -105,8 +129,18 @@ namespace ivey {
         cocos2d::CCNode* m_tabDeco = nullptr;
         cocos2d::CCPoint m_dragFrom;
         float m_scale = 1.f;
-        float m_scaleFrom = 1.f;
-        int m_drag = 0; // 1 = moving, 2 = resizing
+        float m_wFrom = 0.f, m_hFrom = 0.f; // size when a side was grabbed
+        float m_wTarget = 0.f, m_hTarget = 0.f; // size the drag has reached
+        float m_scroll = 0.f, m_maxScroll = 0.f, m_viewH = 0.f, m_scrollVel = 0.f;
+        bool m_scrolled = false, m_inertia = false;
+        int m_scrollTab = -1;
+        int m_pressRow = -1;
+        bool m_pressArrow = false;
+        float m_anim = 0.f;     // 0 closed, 1 open
+        int m_animDir = 1;      // 1 opening, -1 closing, 0 still
+        bool m_closing = false;
+        float m_listSlide = 0.f;
+        int m_drag = 0; // 1 = moving, 2 = resizing, 3 = a row is pressed or the list is scrolled
         int m_sides = 0; // sides being dragged: 1 left, 2 right, 4 top, 8 bottom
         cocos2d::CCPoint m_rootFrom;
         cocos2d::CCLayerColor* m_edge[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -123,10 +157,6 @@ namespace ivey {
         bool m_editClose = false;
         int m_tab = 0;
         int m_tabRows = 1;
-        int m_page = 0;          // page of rows, for tabs with more rows than fit
-        int m_pageTab = -1;
-        int m_pages = 1;
-        void onPage(cocos2d::CCObject* sender);
         bool m_searchOpen = false;
     };
 }

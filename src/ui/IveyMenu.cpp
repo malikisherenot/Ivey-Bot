@@ -15,8 +15,11 @@ namespace ivey {
     static IveyMenu* s_instance = nullptr;
 
     namespace {
-        constexpr float W = 350.f;
-        constexpr float H = 290.f;
+        // The window size changes when a side is dragged.
+        float W = 350.f;
+        float H = 290.f;
+        constexpr float MIN_W = 280.f, MAX_W = 560.f, MIN_H = 200.f, MAX_H = 520.f;
+        constexpr float FOOTER = 26.f; // room for the status line under the rows
         constexpr float TITLE_H = 22.f;
         constexpr float TAB_H = 20.f;
         constexpr float TAB_ROW_H = 18.f;
@@ -65,6 +68,36 @@ namespace ivey {
             int i = ((Bot::get().cfg.accent % ACCENT_COUNT) + ACCENT_COUNT) % ACCENT_COUNT;
             if (i == ACCENT_RAINBOW) return hueColor(g_rainbowHue);
             return ACCENTS[i];
+        }
+
+        // Draws its children only inside its own rectangle.
+        class ClipNode : public CCNode {
+        public:
+            static ClipNode* create(CCSize size) {
+                auto ret = new ClipNode();
+                if (ret && ret->init()) {
+                    ret->setContentSize(size);
+                    ret->autorelease();
+                    return ret;
+                }
+                CC_SAFE_DELETE(ret);
+                return nullptr;
+            }
+
+            void visit() override {
+                auto size = this->getContentSize();
+                auto a = this->convertToWorldSpace({0.f, 0.f});
+                auto b = this->convertToWorldSpace({size.width, size.height});
+                glEnable(GL_SCISSOR_TEST);
+                CCEGLView::get()->setScissorInPoints(std::min(a.x, b.x), std::min(a.y, b.y), std::abs(b.x - a.x), std::abs(b.y - a.y));
+                CCNode::visit();
+                glDisable(GL_SCISSOR_TEST);
+            }
+        };
+
+        // The accent, darker, for the window border.
+        ccColor3B dimAccent(ccColor3B a) {
+            return {static_cast<GLubyte>(a.r * 0.45f + 34.f), static_cast<GLubyte>(a.g * 0.45f + 34.f), static_cast<GLubyte>(a.b * 0.45f + 34.f)};
         }
 
         std::string lower(std::string v) {
@@ -595,7 +628,7 @@ namespace ivey {
 
     void IveyMenu::toggle() {
         if (s_instance) {
-            s_instance->removeFromParentAndCleanup(true);
+            s_instance->closeAnimated();
             return;
         }
         auto scene = CCDirector::get()->getRunningScene();
@@ -611,6 +644,22 @@ namespace ivey {
         CCDirector::get()->getTouchDispatcher()->addTargetedDelegate(this, -500, true);
     }
 
+    // Shrinks and fades out, then removes the menu.
+    void IveyMenu::closeAnimated() {
+        if (m_closing) return;
+        m_closing = true;
+        m_drag = 0;
+        m_sides = 0;
+        showEdges();
+        closeEditor();
+        m_animDir = -1;
+        if (m_veil) m_veil->setVisible(true);
+    }
+
+    void IveyMenu::finishClose(float) {
+        this->removeFromParentAndCleanup(true);
+    }
+
     namespace {
         CCPoint clampWindow(CCPoint p, float scale) {
             auto win = CCDirector::get()->getWinSize();
@@ -620,8 +669,58 @@ namespace ivey {
         }
     }
 
+    // Which row is under a point: its number, -1 outside the list, -2 on the list but not on a row.
+    int IveyMenu::rowAt(CCPoint world, bool& onArrow) const {
+        onArrow = false;
+        if (!m_clip || !m_list) return -1;
+        auto cp = m_clip->convertToNodeSpace(world);
+        if (cp.x < 0.f || cp.x > W || cp.y < 0.f || cp.y > m_viewH) return -1;
+
+        auto lp = m_list->convertToNodeSpace(world);
+        int i = static_cast<int>(std::floor((m_viewH - lp.y) / ROW_H));
+        if (i < 0 || i >= static_cast<int>(m_rows.size())) return -2;
+
+        auto& row = m_rows[static_cast<size_t>(i)];
+        onArrow = (row.arrowIcon || row.editApply || row.textApply) && lp.x >= W - 27.f && lp.x <= W - 9.f;
+        return i;
+    }
+
+    void IveyMenu::showPress(int row) {
+        clearPress();
+        if (!m_list || row < 0) return;
+        auto accent = accentColor();
+        float rowW = W - 44.f;
+        float y = m_viewH - ROW_H / 2.f - static_cast<float>(row) * ROW_H;
+        m_press = CCLayerColor::create({accent.r, accent.g, accent.b, 0}, rowW, ROW_H - 2.f);
+        m_press->setPosition({10.f, y - (ROW_H - 2.f) / 2.f});
+        m_list->addChild(m_press, -1);
+        m_press->setOpacity(46);
+    }
+
+    void IveyMenu::clearPress() {
+        if (m_press) {
+            m_press->removeFromParentAndCleanup(true);
+            m_press = nullptr;
+        }
+    }
+
+    void IveyMenu::setScroll(float y) {
+        m_scroll = std::clamp(y, 0.f, m_maxScroll);
+        if (m_list) m_list->setPositionY(m_scroll);
+        updateScrollBar();
+    }
+
+    void IveyMenu::updateScrollBar() {
+        if (!m_scrollBar) return;
+        float total = m_viewH + m_maxScroll;
+        float barH = std::max(14.f, m_viewH * m_viewH / std::max(total, 1.f));
+        float t = m_maxScroll > 0.f ? m_scroll / m_maxScroll : 0.f;
+        m_scrollBar->setContentSize({2.f, barH});
+        m_scrollBar->setPosition({W - 5.f, FOOTER + m_viewH - barH - (m_viewH - barH) * t});
+    }
+
     bool IveyMenu::ccTouchBegan(CCTouch* touch, CCEvent*) {
-        if (!m_root) return false;
+        if (!m_root || m_closing) return false;
         if (m_editor && touchInside(m_input, touch)) return false;
         if (m_searchHolder && touchInside(m_search, touch)) return false;
 
@@ -629,10 +728,16 @@ namespace ivey {
         auto local = m_root->convertToNodeSpace(touch->getLocation());
         if (!CCRect(0.f, 0.f, W, H).containsPoint(local)) return false;
 
-        // A side (or the bottom right corner) resizes the window, anywhere else on it moves it.
+        // A side (or the bottom right corner) resizes the window, a row is pressed or scrolled,
+        // anywhere else moves it.
         constexpr float EDGE = 9.f;
         m_drag = 0;
         m_sides = 0;
+        m_scrolled = false;
+        m_inertia = false;
+        m_scrollVel = 0.f;
+        m_pressRow = -1;
+        m_pressArrow = false;
         if (local.x > W - 32.f && local.y < 32.f) {
             m_sides = 2 | 8;
         }
@@ -646,12 +751,24 @@ namespace ivey {
         if (m_sides != 0) {
             m_drag = 2;
             m_dragFrom = touch->getLocation();
-            m_scaleFrom = m_scale;
+            m_wFrom = m_wTarget = W;
+            m_hFrom = m_hTarget = H;
             m_rootFrom = m_root->getPosition();
             showEdges();
         }
+        else if (!m_editor) {
+            m_pressRow = rowAt(touch->getLocation(), m_pressArrow);
+            if (m_pressRow >= 0 || (m_pressRow == -2 && m_maxScroll > 0.f)) {
+                m_drag = 3;
+                m_dragFrom = touch->getLocation();
+                if (m_pressRow >= 0 && !m_pressArrow) showPress(m_pressRow);
+            }
+            else {
+                m_drag = 1;
+            }
+        }
         else {
-            m_drag = 1; // drag from anywhere that is not a button: title, gaps, footer
+            m_drag = 1;
         }
         return true;
     }
@@ -665,43 +782,100 @@ namespace ivey {
         }
         else if (m_drag == 2) {
             auto now = touch->getLocation();
-            float dx = now.x - m_dragFrom.x;
-            float dy = now.y - m_dragFrom.y;
+            float dx = (now.x - m_dragFrom.x) / m_scale;
+            float dy = (now.y - m_dragFrom.y) / m_scale;
 
-            // Pulling a side outwards makes the window bigger, pushing it in makes it smaller.
-            float grow = 0.f;
-            int sides = 0;
-            if (m_sides & 1) { grow -= dx / W; ++sides; }
-            if (m_sides & 2) { grow += dx / W; ++sides; }
-            if (m_sides & 4) { grow += dy / H; ++sides; }
-            if (m_sides & 8) { grow -= dy / H; ++sides; }
-            if (sides > 1) grow /= static_cast<float>(sides);
-            float next = std::clamp(m_scaleFrom + grow, 0.6f, 1.4f);
+            // Only the side that is held changes: width for the left and right, height for the top and bottom.
+            float nw = m_wFrom, nh = m_hFrom;
+            if (m_sides & 2) nw = m_wFrom + dx;
+            if (m_sides & 1) nw = m_wFrom - dx;
+            if (m_sides & 4) nh = m_hFrom + dy;
+            if (m_sides & 8) nh = m_hFrom - dy;
+            nw = std::round(std::clamp(nw, MIN_W, MAX_W));
+            nh = std::round(std::clamp(nh, MIN_H, MAX_H));
+            m_wTarget = nw;
+            m_hTarget = nh;
 
-            // The side opposite to the one that is dragged stays where it is.
-            float x = (m_sides & 1) ? m_rootFrom.x + W * (m_scaleFrom - next) : m_rootFrom.x;
-            float y = (m_sides & 4) ? m_rootFrom.y : m_rootFrom.y + H * (m_scaleFrom - next);
-            m_scale = next;
-            m_root->setScale(next);
+            // The side opposite to the one that is held stays where it is.
+            float x = (m_sides & 1) ? m_rootFrom.x + (m_wFrom - nw) * m_scale : m_rootFrom.x;
+            float y = (m_sides & 8) ? m_rootFrom.y + (m_hFrom - nh) * m_scale : m_rootFrom.y;
             m_root->setPosition(x, y);
+
+            if (std::abs(nw - W) >= 2.f || std::abs(nh - H) >= 2.f) {
+                W = nw;
+                H = nh;
+                relayout();
+            }
             showEdges(); // the rainbow accent keeps moving
+        }
+        else if (m_drag == 3) {
+            auto now = touch->getLocation();
+            if (!m_scrolled && ccpDistance(now, m_dragFrom) > 8.f) {
+                m_scrolled = true;
+                clearPress();
+            }
+            if (m_scrolled) {
+                float dy = (now.y - touch->getPreviousLocation().y) / m_scale;
+                setScroll(m_scroll + dy);
+                m_scrollVel = 0.5f * m_scrollVel + 0.5f * dy * 60.f;
+            }
         }
     }
 
-    void IveyMenu::ccTouchEnded(CCTouch*, CCEvent*) {
-        if (m_drag == 2) m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
-        if (m_drag != 0) saveWindow();
+    void IveyMenu::ccTouchEnded(CCTouch* touch, CCEvent*) {
+        int mode = m_drag;
         m_drag = 0;
-        m_sides = 0;
-        showEdges();
+
+        if (mode == 2) {
+            m_sides = 0;
+            showEdges();
+            if (W != m_wTarget || H != m_hTarget) {
+                W = m_wTarget;
+                H = m_hTarget;
+                relayout();
+            }
+            m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
+            saveWindow();
+        }
+        else if (mode == 1) {
+            saveWindow();
+        }
+        else if (mode == 3) {
+            clearPress();
+            if (m_scrolled) {
+                m_inertia = std::abs(m_scrollVel) > 40.f;
+                return;
+            }
+            bool onArrow = false;
+            int row = rowAt(touch->getLocation(), onArrow);
+            if (row >= 0 && row == m_pressRow && onArrow == m_pressArrow) {
+                // Nothing may touch this menu after this, the tap can close it.
+                if (onArrow) activateArrow(static_cast<size_t>(row));
+                else activateRow(static_cast<size_t>(row));
+            }
+        }
     }
 
     void IveyMenu::ccTouchCancelled(CCTouch*, CCEvent*) {
-        if (m_drag == 2) m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
-        if (m_drag != 0) saveWindow();
+        int mode = m_drag;
         m_drag = 0;
-        m_sides = 0;
-        showEdges();
+        if (mode == 2) {
+            m_sides = 0;
+            showEdges();
+            if (W != m_wTarget || H != m_hTarget) {
+                W = m_wTarget;
+                H = m_hTarget;
+                relayout();
+            }
+            m_root->setPosition(clampWindow(m_root->getPosition(), m_scale));
+            saveWindow();
+        }
+        else if (mode == 3) {
+            clearPress();
+        }
+        else if (mode == 1) {
+            saveWindow();
+        }
     }
 
     // The sides that are being dragged light up in the accent colour, and go dark again when let go.
@@ -721,6 +895,8 @@ namespace ivey {
         mod->setSavedValue("menu-x", m_root->getPositionX());
         mod->setSavedValue("menu-y", m_root->getPositionY());
         mod->setSavedValue("menu-scale", m_scale);
+        mod->setSavedValue("menu-w", W);
+        mod->setSavedValue("menu-h", H);
     }
 
     void IveyMenu::keyBackClicked() {
@@ -738,6 +914,8 @@ namespace ivey {
         auto mod = Mod::get();
 
         m_scale = std::clamp(mod->getSavedValue<float>("menu-scale", 1.f), 0.6f, 1.4f);
+        W = std::clamp(mod->getSavedValue<float>("menu-w", 350.f), MIN_W, MAX_W);
+        H = std::clamp(mod->getSavedValue<float>("menu-h", 290.f), MIN_H, MAX_H);
 
         m_root = CCNode::create();
         m_root->setScale(m_scale);
@@ -747,87 +925,25 @@ namespace ivey {
         }, m_scale));
         this->addChild(m_root);
 
-        // Strips along the four sides, only visible while that side is dragged.
-        for (int i = 0; i < 4; ++i) {
-            float w = i < 2 ? 3.f : W;
-            float h = i < 2 ? H : 3.f;
-            auto strip = CCLayerColor::create({255, 255, 255, 235}, w, h);
-            strip->setPosition({i == 1 ? W - 3.f : 0.f, i == 2 ? H - 3.f : 0.f});
-            strip->setVisible(false);
-            m_root->addChild(strip, 900);
-            m_edge[i] = strip;
-        }
+        // The whole window sits in one node that shrinks a little when it opens and closes.
+        m_body = CCNode::create();
+        m_root->addChild(m_body);
+        m_back = CCNode::create();
+        m_body->addChild(m_back, 0);
+        m_chrome = CCNode::create();
+        m_body->addChild(m_chrome, 2);
+        m_over = CCNode::create();
+        m_body->addChild(m_over, 800);
 
-        // soft shadow, thin border, then the window itself
-        auto shadow = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
-        shadow->setAnchorPoint({0.f, 0.f});
-        shadow->setContentSize({W + 8.f, H + 8.f});
-        shadow->setPosition({-4.f, -6.f});
-        shadow->setColor({0, 0, 0});
-        shadow->setOpacity(90);
-        m_root->addChild(shadow);
-
-        auto border = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
-        border->setAnchorPoint({0.f, 0.f});
-        border->setContentSize({W + 2.f, H + 2.f});
-        border->setPosition({-1.f, -1.f});
-        border->setColor({84, 84, 84});
-        border->setOpacity(255);
-        m_root->addChild(border);
-
-        m_bg = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
-        m_bg->setAnchorPoint({0.f, 0.f});
-        m_bg->setContentSize({W, H});
-        m_bg->setColor({20, 20, 20});
-        m_root->addChild(m_bg);
-
-        // animated colour layer, shown when a Window Effect is chosen
-        m_fx = ThemeFx::create({W - 6.f, H - 6.f});
-        m_fx->setPosition({3.f, 3.f});
-        m_root->addChild(m_fx);
-
-        auto titleBar = CCLayerColor::create({38, 38, 38, 255}, W - 8.f, TITLE_H - 4.f);
-        titleBar->setPosition({4.f, H - TITLE_H});
-        m_root->addChild(titleBar);
-        auto titleLine = CCLayerColor::create({64, 64, 64, 255}, W - 8.f, 1.f);
-        titleLine->setPosition({4.f, H - TITLE_H - 1.f});
-        m_root->addChild(titleLine);
-
-        auto title = CCLabelBMFont::create("Ivey Bot", fontName().c_str());
-        styleText(title, 0.45f);
-        title->setColor({235, 235, 235});
-        title->setPosition({W / 2.f, H - TITLE_H / 2.f - 2.f});
-        m_root->addChild(title, 2);
-
-        // resize grip in the corner
-        auto grip = CCDrawNode::create();
-        CCPoint tri[3] = {{W - 5.f, 5.f}, {W - 5.f, 19.f}, {W - 19.f, 5.f}};
-        grip->drawPolygon(tri, 3, ccc4f(0.45f, 0.45f, 0.45f, 1.f), 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
-        m_root->addChild(grip, 2);
+        buildFrame();
 
         m_tabDeco = CCNode::create();
-        m_root->addChild(m_tabDeco, 2);
+        m_body->addChild(m_tabDeco, 2);
 
         m_tabMenu = CCMenu::create();
         m_tabMenu->setPosition({0.f, 0.f});
         m_tabMenu->setTouchPriority(-501);
-        m_root->addChild(m_tabMenu, 3);
-
-        m_content = CCMenu::create();
-        m_content->setPosition({0.f, 0.f});
-        m_content->setTouchPriority(-501);
-        m_root->addChild(m_content, 3);
-
-        auto statusLine = CCLayerColor::create({50, 50, 50, 255}, W - 40.f, 1.f);
-        statusLine->setPosition({10.f, 22.f});
-        m_root->addChild(statusLine, 2);
-
-        m_status = CCLabelBMFont::create("", fontName().c_str());
-        styleText(m_status, 0.38f);
-        m_status->setAnchorPoint({0.f, 0.5f});
-        m_status->setColor({150, 150, 150});
-        m_status->setPosition({10.f, 12.f});
-        m_root->addChild(m_status, 2);
+        m_body->addChild(m_tabMenu, 3);
 
         // Built right away, nothing waits for a timer.
         applyTheme();
@@ -838,20 +954,137 @@ namespace ivey {
         m_statusText = Bot::get().status;
         m_status->setString(m_statusText.substr(0, 48).c_str());
 
-        // the same effect again, over the buttons and text, but much fainter
-        m_fxTop = ThemeFx::create({W - 6.f, H - 6.f});
-        m_fxTop->setPosition({3.f, 3.f});
-        m_fxTop->setAlphaScale(static_cast<float>(Bot::get().cfg.fxTopPct) / 100.f);
-        m_root->addChild(m_fxTop, 800);
+        // opens with a small grow and a fade
+        m_anim = 0.f;
+        m_animDir = 1;
+        m_body->setScale(0.94f);
+        m_veil->setOpacity(220);
 
         this->schedule(schedule_selector(IveyMenu::sync), 0.2f);
         this->scheduleUpdate();
         return true;
     }
 
+    // The window itself. Made the first time, and moved to the new size every time after, so nothing
+    // heavy (the colour effect) is made again while a side is dragged.
+    void IveyMenu::buildFrame() {
+        m_body->setContentSize({W, H});
+        m_body->setAnchorPoint({0.5f, 0.5f});
+        m_body->setPosition({W / 2.f, H / 2.f});
+
+        bool first = m_bg == nullptr;
+
+        if (first) {
+            // soft shadow, thin border, then the window itself
+            m_shadow = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
+            m_shadow->setAnchorPoint({0.f, 0.f});
+            m_shadow->setColor({0, 0, 0});
+            m_shadow->setOpacity(90);
+            m_back->addChild(m_shadow);
+
+            m_border = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
+            m_border->setAnchorPoint({0.f, 0.f});
+            m_border->setColor(dimAccent(accentColor()));
+            m_border->setOpacity(255);
+            m_back->addChild(m_border);
+
+            m_bg = extension::CCScale9Sprite::create("square02b_001.png", {0.f, 0.f, 80.f, 80.f});
+            m_bg->setAnchorPoint({0.f, 0.f});
+            m_bg->setColor({20, 20, 20});
+            m_back->addChild(m_bg);
+
+            // animated colour layer, shown when a Window Effect is chosen
+            m_fx = ThemeFx::create({W - 6.f, H - 6.f});
+            m_fx->setPosition({3.f, 3.f});
+            m_back->addChild(m_fx);
+
+            m_titleBar = CCLayerGradient::create({52, 52, 52, 255}, {32, 32, 32, 255});
+            m_back->addChild(m_titleBar);
+            m_titleLine = CCLayerColor::create({accentColor().r, accentColor().g, accentColor().b, 255}, W - 8.f, 1.f);
+            m_back->addChild(m_titleLine);
+
+            m_title = CCLabelBMFont::create("Ivey Bot", fontName().c_str());
+            styleText(m_title, 0.45f);
+            m_title->setColor({235, 235, 235});
+            m_chrome->addChild(m_title, 2);
+
+            // resize grip in the corner
+            m_grip = CCDrawNode::create();
+            m_chrome->addChild(m_grip, 2);
+
+            m_statusLine = CCLayerColor::create({50, 50, 50, 255}, W - 40.f, 1.f);
+            m_chrome->addChild(m_statusLine, 2);
+
+            m_status = CCLabelBMFont::create("", fontName().c_str());
+            styleText(m_status, 0.38f);
+            m_status->setAnchorPoint({0.f, 0.5f});
+            m_status->setColor({150, 150, 150});
+            m_chrome->addChild(m_status, 2);
+
+            // the same effect again, over the buttons and text, but much fainter
+            m_fxTop = ThemeFx::create({W - 6.f, H - 6.f});
+            m_fxTop->setAlphaScale(static_cast<float>(Bot::get().cfg.fxTopPct) / 100.f);
+            m_over->addChild(m_fxTop);
+
+            // strips along the four sides, only visible while that side is dragged
+            for (int i = 0; i < 4; ++i) {
+                auto strip = CCLayerColor::create({255, 255, 255, 235}, 3.f, 3.f);
+                strip->setVisible(false);
+                m_over->addChild(strip, 100);
+                m_edge[i] = strip;
+            }
+
+            m_veil = CCLayerColor::create({0, 0, 0, 255}, W, H);
+            m_over->addChild(m_veil, 200);
+        }
+
+        m_shadow->setContentSize({W + 8.f, H + 8.f});
+        m_shadow->setPosition({-4.f, -6.f});
+        m_border->setContentSize({W + 2.f, H + 2.f});
+        m_border->setPosition({-1.f, -1.f});
+        m_bg->setContentSize({W, H});
+        m_fx->resize({W - 6.f, H - 6.f});
+        m_fx->setPosition({3.f, 3.f});
+        m_fxTop->resize({W - 6.f, H - 6.f});
+        m_fxTop->setPosition({3.f, 3.f});
+
+        m_titleBar->setContentSize({W - 8.f, TITLE_H - 4.f});
+        m_titleBar->setPosition({4.f, H - TITLE_H});
+        m_titleLine->setContentSize({W - 8.f, 1.f});
+        m_titleLine->setPosition({4.f, H - TITLE_H - 1.f});
+        m_title->setPosition({W / 2.f, H - TITLE_H / 2.f - 2.f});
+
+        m_grip->clear();
+        CCPoint tri[3] = {{W - 5.f, 5.f}, {W - 5.f, 19.f}, {W - 19.f, 5.f}};
+        m_grip->drawPolygon(tri, 3, ccc4f(0.45f, 0.45f, 0.45f, 1.f), 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
+
+        m_statusLine->setContentSize({W - 40.f, 1.f});
+        m_statusLine->setPosition({10.f, 22.f});
+        m_status->setPosition({10.f, 12.f});
+
+        for (int i = 0; i < 4; ++i) {
+            m_edge[i]->setContentSize({i < 2 ? 3.f : W, i < 2 ? H : 3.f});
+            m_edge[i]->setPosition({i == 1 ? W - 3.f : 0.f, i == 2 ? H - 3.f : 0.f});
+        }
+        m_veil->setContentSize({W, H});
+    }
+
+    // Everything again for a new width or height.
+    void IveyMenu::relayout() {
+        closeEditor();
+        showSearch(false); // its box has the old width
+        buildFrame();
+        rebuildTabs();
+        rebuild();
+        refreshRows();
+        showEdges();
+    }
+
     void IveyMenu::applyTheme() {
         m_bg->setOpacity(OPACITIES[Bot::get().cfg.opacity % OPACITY_COUNT]);
         auto& cfg = Bot::get().cfg;
+        if (m_border) m_border->setColor(dimAccent(accentColor()));
+        if (m_titleLine) m_titleLine->setColor(accentColor());
         int fx = std::clamp(cfg.fx, 0, ThemeFx::count(Bot::get().cfg.devMode) - 1);
         if (m_fx) m_fx->setEffect(fx, accentColor());
         if (m_fxTop) {
@@ -860,8 +1093,45 @@ namespace ivey {
         }
     }
 
-    // Runs every frame. Only does something when the accent is the moving rainbow.
+    // Runs every frame: the open and close animation, the scroll glide, and the moving rainbow accent.
     void IveyMenu::update(float dt) {
+        if (m_animDir != 0) {
+            m_anim = std::clamp(m_anim + static_cast<float>(m_animDir) * dt / 0.18f, 0.f, 1.f);
+            float inv = 1.f - m_anim;
+            float e = 1.f - inv * inv * inv;
+            if (m_body) m_body->setScale(0.94f + 0.06f * e);
+            if (m_veil) m_veil->setOpacity(static_cast<GLubyte>(220.f * (1.f - e)));
+            if (m_animDir > 0 && m_anim >= 1.f) {
+                m_animDir = 0;
+                if (m_veil) m_veil->setVisible(false);
+            }
+            else if (m_animDir < 0 && m_anim <= 0.f) {
+                m_animDir = 0;
+                this->unscheduleUpdate();
+                this->scheduleOnce(schedule_selector(IveyMenu::finishClose), 0.f);
+                return;
+            }
+        }
+
+        if (m_inertia) {
+            float before = m_scroll;
+            setScroll(m_scroll + m_scrollVel * dt);
+            m_scrollVel *= std::pow(0.04f, dt); // about 96% gone after a second
+            if (std::abs(m_scrollVel) < 12.f || m_scroll == before) m_inertia = false;
+        }
+
+        // the rows slide in a little when another tab opens
+        if (m_list) {
+            if (m_listSlide > 0.3f) {
+                m_listSlide -= m_listSlide * std::min(1.f, dt * 14.f);
+                m_list->setPositionX(m_listSlide);
+            }
+            else if (m_listSlide != 0.f) {
+                m_listSlide = 0.f;
+                m_list->setPositionX(0.f);
+            }
+        }
+
         auto& cfg = Bot::get().cfg;
         if (((cfg.accent % ACCENT_COUNT) + ACCENT_COUNT) % ACCENT_COUNT != ACCENT_RAINBOW) return;
 
@@ -871,6 +1141,9 @@ namespace ivey {
         ccColor4F accentF = ccc4f(accent.r / 255.f, accent.g / 255.f, accent.b / 255.f, 1.f);
 
         if (m_tabLine) m_tabLine->setColor(accent);
+        if (m_titleLine) m_titleLine->setColor(accent);
+        if (m_border) m_border->setColor(dimAccent(accent));
+        if (m_scrollBar) m_scrollBar->setColor(accent);
         if (m_fx) m_fx->setAccent(accent);
         if (m_fxTop) m_fxTop->setAccent(accent);
 
@@ -888,8 +1161,8 @@ namespace ivey {
 
     std::string IveyMenu::structureKey() const {
         auto& bot = Bot::get();
-        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
-                           bot.cfg.fx, bot.cfg.fxTop, bot.cfg.devMode, bot.cfg.fxTopPct, m_page, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
+        return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
+                           bot.cfg.fx, bot.cfg.fxTop, bot.cfg.devMode, bot.cfg.fxTopPct, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
                (Renderer::get().active() ? "|r" : "|-") + (Renderer::get().available() ? "a" : "x");
     }
 
@@ -929,6 +1202,10 @@ namespace ivey {
                 if (on != view.on) {
                     view.on = on;
                     view.mark->setVisible(on);
+                    if (on) { // pops in
+                        view.mark->setScale(0.2f);
+                        view.mark->runAction(CCEaseBackOut::create(CCScaleTo::create(0.18f, 1.f)));
+                    }
                 }
             }
             if (row.detail && view.detail) {
@@ -1037,68 +1314,62 @@ namespace ivey {
     }
 
     void IveyMenu::rebuild() {
-        m_content->removeAllChildrenWithCleanup(true);
+        if (m_clip) {
+            m_clip->removeFromParentAndCleanup(true);
+            m_clip = nullptr;
+            m_list = nullptr;
+            m_press = nullptr;
+        }
+        if (m_scrollBar) {
+            m_scrollBar->removeFromParentAndCleanup(true);
+            m_scrollBar = nullptr;
+        }
         m_views.clear();
         showSearch(m_tab == TAB_SEARCH);
-        if (m_tab != m_pageTab) {
-            m_pageTab = m_tab;
-            m_page = 0;
+
+        if (m_tab != m_scrollTab) { // another tab: from the top, the rows slide in
+            m_scrollTab = m_tab;
+            m_scroll = 0.f;
+            m_scrollVel = 0.f;
+            m_inertia = false;
+            m_listSlide = 14.f;
         }
-        auto allRows = rowsFor(m_tab, m_query);
+        m_rows = rowsFor(m_tab, m_query);
+        m_built = structureKey();
 
         auto accent = accentColor();
         ccColor4F accentF = ccc4f(accent.r / 255.f, accent.g / 255.f, accent.b / 255.f, 1.f);
 
         float rowW = W - 44.f;
         float rowH = ROW_H - 2.f;
-        float y = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f - ROW_H / 2.f;
-        if (m_tab == TAB_SEARCH) y -= 24.f; // room for the search box
+        float top = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f;
+        if (m_tab == TAB_SEARCH) top -= 24.f; // room for the search box
 
-        // Only as many rows as fit above the status line. The rest are on the next pages.
-        constexpr float FOOTER = 26.f;
-        auto capacity = static_cast<size_t>(std::max(1.f, std::floor((y - FOOTER - ROW_H / 2.f) / ROW_H) + 1.f));
-        m_pages = std::max(1, static_cast<int>((allRows.size() + capacity - 1) / capacity));
-        m_page = std::clamp(m_page, 0, m_pages - 1);
-        size_t first = static_cast<size_t>(m_page) * capacity;
-        size_t last = std::min(allRows.size(), first + capacity);
-        m_rows.assign(allRows.begin() + static_cast<std::ptrdiff_t>(first), allRows.begin() + static_cast<std::ptrdiff_t>(last));
-        m_built = structureKey();
+        // All rows are in one list that scrolls inside a box above the status line.
+        m_viewH = std::max(ROW_H, top - FOOTER);
+        float total = static_cast<float>(m_rows.size()) * ROW_H;
+        m_maxScroll = std::max(0.f, total - m_viewH);
+        m_scroll = std::clamp(m_scroll, 0.f, m_maxScroll);
 
-        if (m_pages > 1) {
-            auto pageButton = [&](char const* text, float x, int dir) {
-                auto node = CCNode::create();
-                node->setContentSize({16.f, 14.f});
-                node->setAnchorPoint({0.5f, 0.5f});
-                node->addChild(CCLayerColor::create({60, 60, 60, 255}, 16.f, 14.f));
-                auto l = CCLabelBMFont::create(text, fontName().c_str());
-                styleText(l, 0.45f);
-                l->setColor({225, 225, 225});
-                l->setPosition({8.f, 7.f});
-                node->addChild(l, 1);
-                auto item = CCMenuItemSpriteExtra::create(node, nullptr, this, menu_selector(IveyMenu::onPage));
-                item->m_scaleMultiplier = 1.f;
-                item->setTag(dir);
-                item->setPosition({x, 12.f});
-                m_content->addChild(item);
-            };
-            pageButton("<", W - 92.f, -1);
-            pageButton(">", W - 52.f, 1);
+        auto clip = ClipNode::create({W, m_viewH});
+        clip->setPosition({0.f, FOOTER});
+        m_body->addChild(clip, 3);
+        m_clip = clip;
 
-            auto pageLabel = CCLabelBMFont::create(fmt::format("{}/{}", m_page + 1, m_pages).c_str(), fontName().c_str());
-            styleText(pageLabel, 0.38f);
-            pageLabel->setColor({190, 190, 190});
-            pageLabel->setPosition({W - 72.f, 12.f});
-            m_content->addChild(pageLabel, 1);
-        }
+        m_list = CCNode::create();
+        m_list->setPosition({m_listSlide, m_scroll});
+        clip->addChild(m_list);
 
         for (size_t i = 0; i < m_rows.size(); ++i) {
             auto& row = m_rows[i];
             bool hasCheck = static_cast<bool>(row.get);
             RowView view;
+            float y = m_viewH - ROW_H / 2.f - static_cast<float>(i) * ROW_H; // centre of the row
 
             auto holder = CCNode::create();
             holder->setContentSize({rowW, rowH});
-            holder->setAnchorPoint({0.5f, 0.5f});
+            holder->setPosition({10.f, y - rowH / 2.f});
+            m_list->addChild(holder);
 
             if (row.sep) {
                 auto line = CCLayerColor::create({52, 52, 52, 255}, rowW, 1.f);
@@ -1124,6 +1395,9 @@ namespace ivey {
                 auto mark = CCDrawNode::create();
                 mark->drawSegment({3.5f, 7.5f}, {6.f, 4.5f}, 0.9f, accentF);
                 mark->drawSegment({6.f, 4.5f}, {10.5f, 10.f}, 0.9f, accentF);
+                mark->setContentSize({14.f, 14.f}); // scales around its middle when it pops in
+                mark->setAnchorPoint({0.5f, 0.5f});
+                mark->setPosition({7.f, 7.f});
                 box->addChild(mark, 2);
 
                 box->setPosition({4.f, rowH / 2.f - 7.f});
@@ -1154,12 +1428,6 @@ namespace ivey {
                 view.detail = det;
             }
 
-            auto item = CCMenuItemSpriteExtra::create(holder, nullptr, this, menu_selector(IveyMenu::onRow));
-            item->m_scaleMultiplier = 1.f;
-            item->setTag(static_cast<int>(i));
-            item->setPosition({10.f + rowW / 2.f, y});
-            m_content->addChild(item);
-
             if (row.arrowIcon || row.editApply || row.textApply) {
                 // a small square with a triangle, like the original window
                 auto arrowNode = CCNode::create();
@@ -1175,22 +1443,44 @@ namespace ivey {
                 tri->drawPolygon(v, 3, ccc4f(0.88f, 0.88f, 0.88f, 1.f), 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
                 arrowNode->addChild(tri, 2);
 
-                auto arrowItem = CCMenuItemSpriteExtra::create(arrowNode, nullptr, this, menu_selector(IveyMenu::onArrow));
-                arrowItem->m_scaleMultiplier = 1.f;
-                arrowItem->setTag(static_cast<int>(i));
-                arrowItem->setPosition({W - 18.f, y});
-                m_content->addChild(arrowItem);
+                arrowNode->setPosition({W - 18.f, y});
+                m_list->addChild(arrowNode);
             }
 
             m_views.push_back(view);
-            y -= ROW_H;
+        }
+
+        if (m_maxScroll > 0.f) {
+            m_scrollBar = CCLayerColor::create({accent.r, accent.g, accent.b, 150}, 2.f, 10.f);
+            m_body->addChild(m_scrollBar, 4);
+            updateScrollBar();
         }
     }
 
-    void IveyMenu::onPage(CCObject* sender) {
-        int dir = static_cast<CCNode*>(sender)->getTag();
-        m_page = std::clamp(m_page + dir, 0, std::max(0, m_pages - 1));
-        queue(false);
+    void IveyMenu::activateRow(size_t i) {
+        if (i >= m_rows.size()) return;
+        auto& row = m_rows[i];
+
+        if (row.get && row.set) row.set(!row.get());
+        else if (row.arrow) row.arrow();
+        else if (row.editApply || row.textApply) openEditor(i);
+
+        if (m_closeAfter) {
+            this->removeFromParentAndCleanup(true); // nothing may touch this menu after this
+            return;
+        }
+
+        refreshRows(); // shows the change right now
+        if (structureKey() != m_built) queue(false);
+    }
+
+    void IveyMenu::activateArrow(size_t i) {
+        if (i >= m_rows.size()) return;
+        if (m_rows[i].editApply || m_rows[i].textApply) openEditor(i);
+        else if (m_rows[i].arrow) m_rows[i].arrow();
+
+        refreshRows();
+        if (structureKey() != m_built) queue(false);
     }
 
     void IveyMenu::sync(float) {
@@ -1217,34 +1507,6 @@ namespace ivey {
         queue(true);
     }
 
-    void IveyMenu::onRow(CCObject* sender) {
-        size_t i = static_cast<size_t>(static_cast<CCNode*>(sender)->getTag());
-        if (i >= m_rows.size()) return;
-        auto& row = m_rows[i];
-
-        if (row.get && row.set) row.set(!row.get());
-        else if (row.arrow) row.arrow();
-        else if (row.editApply || row.textApply) openEditor(i);
-
-        if (m_closeAfter) {
-            this->removeFromParentAndCleanup(true); // nothing may touch this menu after this
-            return;
-        }
-
-        refreshRows(); // shows the change right now
-        if (structureKey() != m_built) queue(false);
-    }
-
-    void IveyMenu::onArrow(CCObject* sender) {
-        size_t i = static_cast<size_t>(static_cast<CCNode*>(sender)->getTag());
-        if (i >= m_rows.size()) return;
-        if (m_rows[i].editApply || m_rows[i].textApply) openEditor(i);
-        else if (m_rows[i].arrow) m_rows[i].arrow();
-
-        refreshRows();
-        if (structureKey() != m_built) queue(false);
-    }
-
     void IveyMenu::openEditor(size_t i) {
         if (i >= m_rows.size() || (!m_rows[i].editApply && !m_rows[i].textApply)) return;
         closeEditor();
@@ -1254,7 +1516,7 @@ namespace ivey {
         m_editIndex = static_cast<int>(i);
 
         m_editor = CCNode::create();
-        m_root->addChild(m_editor, 5);
+        m_body->addChild(m_editor, 5);
 
         auto bar = CCLayerColor::create({36, 36, 36, 255}, W - 16.f, 46.f);
         bar->setPosition({8.f, 24.f});
@@ -1314,7 +1576,7 @@ namespace ivey {
         if (m_searchHolder) return;
 
         m_searchHolder = CCNode::create();
-        m_root->addChild(m_searchHolder, 4);
+        m_body->addChild(m_searchHolder, 4);
 
         float y = H - TITLE_H - TAB_H - static_cast<float>(m_tabRows - 1) * TAB_ROW_H - 8.f - ROW_H / 2.f;
 
@@ -1412,6 +1674,6 @@ namespace ivey {
     }
 
     void IveyMenu::onClose(CCObject*) {
-        this->removeFromParentAndCleanup(true);
+        closeAnimated();
     }
 }

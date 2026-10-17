@@ -191,6 +191,20 @@ void main() {
     }
 
     // Colour layer used when the shader cannot run: the colours move with the time, no shader needed.
+    void ThemeFx::resize(CCSize size) {
+        m_size = size;
+        this->setContentSize(size);
+        if (m_fallback) {
+            m_fallback->setContentSize(size);
+            if (m_lines) {
+                m_lines->clear();
+                for (float y = 1.f; y < m_size.height; y += 3.f) {
+                    m_lines->drawSegment({0.f, y}, {m_size.width, y}, 0.5f, ccc4f(0.f, 0.f, 0.f, 0.22f));
+                }
+            }
+        }
+    }
+
     void ThemeFx::makeFallback() {
         if (m_fallback) return;
         m_fallback = CCLayerGradient::create({0, 0, 0, 0}, {0, 0, 0, 0}, {1.f, 1.f});
