@@ -288,7 +288,8 @@ namespace {
     // is stepped one step at a time for them, even at 240 TPS.
     bool perStep() {
         auto& cfg = Bot::get().cfg;
-        return cfg.preventDeath || cfg.hitboxTrail || cfg.pathfinder;
+        // The Pathfinder does nothing in a replay, so it must not change how the steps are made there either.
+        return cfg.preventDeath || cfg.hitboxTrail || (cfg.pathfinder && Bot::get().mode != Mode::Replay);
     }
 
     // Above 240 TPS the game only takes smaller steps through its step-size function. On a device where
@@ -857,11 +858,11 @@ namespace {
                             log::info("No step size hook on this device: using the time warp method");
                         }
                     }
-                    else if (m_calls > 100.f && m_hook < 1.f && !cfg.classicNow() && cfg.methodNow() != 2 && !loggedHook) {
+                    else if (m_calls > 100.f && !bot.hookSeen && !cfg.classicNow() && cfg.methodNow() != 2 && !loggedHook) {
                         loggedHook = true;
                         log::warn("The step size hook is not running, the physics stays at 240");
                     }
-                    if (m_calls > 1.f && m_calls < tpsNow * 0.9f && !cfg.stepper) {
+                    if (m_calls > 1.f && m_running > 0.5f && m_calls < tpsNow * 0.9f && !cfg.stepper) {
                         static bool loggedSlow = false;
                         if (!loggedSlow) {
                             loggedSlow = true;
@@ -895,9 +896,11 @@ $on_mod(Loaded) {
 
 // Inputs, TPS and replays.
 class $modify(IveyGameLayer, GJBaseGameLayer) {
-    // The TPS code is asked first, ahead of other bots that change the step as well. Echo asks for First, so the
-    // lowest number there is, is used here: a lower number runs earlier. Silicate's priority is not known.
+    // Developer setting "TPS Hooks First" (needs a restart): the TPS code is asked before other bots that change
+    // the step as well. Echo asks for First, so the lowest number there is, is used: a lower number runs earlier.
+    // Off by default: the order of the hooks is then the one of the game, as before.
     static void onModify(auto& self) {
+        if (!Mod::get()->getSavedValue<bool>("hooks-first", false)) return;
         (void)self.setHookPriority("GJBaseGameLayer::update", std::numeric_limits<int32_t>::min());
         (void)self.setHookPriority("GJBaseGameLayer::getModifiedDelta", std::numeric_limits<int32_t>::min());
     }
@@ -1001,8 +1004,9 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // Classic loop: the same method as the xdBot TPS bypass, step for step. It is here to compare
         // with the measured loop below when the TPS does not behave.
         if (bot.cfg.classicNow() && !perStep()) {
-            float realClassic = dt + bot.leftOver;
-            if (realClassic > dt && newDt < dt) realClassic = dt;
+            // The part of a step that was left over from the last frame is added, so no time is lost.
+            // A bigger backlog (slow frames) is not caught up, that would make a burst.
+            float realClassic = dt + std::clamp(bot.leftOver, -newDt, newDt);
 
             auto begin = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> limit(ivey::Renderer::get().active() ? 1.0e7 : 16.666);
@@ -1021,9 +1025,10 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             }
             bot.stepping = false;
             classicWarp.restore();
-            bot.leftOver += (dt - newDt * mult);
+            bot.leftOver = std::clamp(realClassic - newDt * static_cast<float>(mult), -0.05f, 1.f);
 
             if (auto pl = PlayLayer::get()) {
+                ivey::Assist::drawHitboxes(pl); // once per frame, not on every step
                 if (!ivey::Trajectory::get().creating()) ivey::Trajectory::get().update(pl);
             }
             return;
@@ -1047,8 +1052,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                 bot.singleState = "needs the step hook (not installed)";
             }
             else if (singlestep::ready()) {
-                float realSingle = dt + bot.leftOver;
-                if (realSingle > dt && newDt < dt) realSingle = dt;
+                float realSingle = dt + std::clamp(bot.leftOver, -newDt, newDt); // plus the part of a step left over
                 int count = static_cast<int>(std::floor(static_cast<double>(realSingle) / static_cast<double>(newDt) + 1e-4));
 
                 // A batch cannot be stopped half way, so its size is kept inside the step budget by what a step cost lately.
@@ -1067,6 +1071,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                         bot.singleState = "patch could not be turned on";
                     }
                     else {
+                        double timeBefore = m_gameState.m_levelTime;
                         auto callStart = std::chrono::high_resolution_clock::now();
                         GJBaseGameLayer::update(static_cast<float>(count) * newDt);
                         double ns = std::chrono::duration<double, std::nano>(std::chrono::high_resolution_clock::now() - callStart).count();
@@ -1079,8 +1084,13 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                         bot.stepCalls += count;
                         bot.stepMoves += count;
                         ++bot.loopFrames;
-                        if (bot.hookCalls == hooksBefore) {
-                            // The step size hook did not run, so the steps were not 1 / TPS long: give up on this mode.
+                        // The game does not ask for the step size while the level has not started to move (the
+                        // opening, a pause), so only an update that moved the level counts as a miss.
+                        bool moved = m_gameState.m_levelTime - timeBefore > 1e-9;
+                        if (bot.hookCalls != hooksBefore) bot.singleMisses = 0;
+                        else if (moved) ++bot.singleMisses;
+                        if (bot.singleMisses >= 3) {
+                            // The step size hook did not run on several steps in a row, so the steps were not 1 / TPS long: give up on this mode.
                             bot.singleBroken = true;
                             bot.singleState = "step hook did not run";
                             log::warn("Single-update TPS: the step size hook did not run, going back to the normal loop");
@@ -1090,8 +1100,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
                 if (!bot.singleBroken) {
                     bot.tpsHonored = true;
-                    bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) -
-                                                                 static_cast<double>(newDt) * count, -0.05, 0.1));
+                    bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(realSingle) - static_cast<double>(newDt) * count, -0.05, 0.1));
                     if (auto pl = PlayLayer::get()) {
                         if (!ivey::Trajectory::get().creating()) ivey::Trajectory::get().update(pl);
                     }
@@ -1103,8 +1112,10 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         // Until the game reports its own step size, use the one that is being fed to it.
         if (!ivey::Trajectory::get().deltaSeen) ivey::Trajectory::get().delta = 60.f * newDt;
 
-        float realDt = dt + bot.leftOver;
-        if (realDt > dt && newDt < dt) realDt = dt;
+        // The part of a step left over from the last frame is added, so no time is lost: cutting it away
+        // made every frame lose part of a step (about 4% at 720 TPS). A bigger backlog (slow frames) is
+        // not caught up, that would make a burst.
+        float realDt = dt + std::clamp(bot.leftOver, -newDt, newDt);
 
         auto startTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> budget(ivey::Renderer::get().active() ? 1.0e7 : static_cast<double>(bot.cfg.stepBudget));
@@ -1136,6 +1147,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
 
         bool paused = false;
         int done = 0;
+        int movedCalls = 0; // calls that moved the level: the game asks for the step size only then
         WarpGuard warp(this, useWarp(tps), tps);
         bot.stepping = true;
         for (int i = 0; i < 20000; ++i) {
@@ -1175,7 +1187,10 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
             bot.stepNs += std::chrono::duration<double, std::nano>(callEnd - callStart).count();
             ++done;
             ++bot.stepCalls;
-            if (m_gameState.m_levelTime - beforeCall > 1e-9) ++bot.stepMoves;
+            if (m_gameState.m_levelTime - beforeCall > 1e-9) {
+                ++bot.stepMoves;
+                ++movedCalls;
+            }
             callsTime += static_cast<double>(newDt);
             if (bot.preventSkip > 0) --bot.preventSkip; // just left the stepper, let the player act
             if (auto pl = PlayLayer::get(); pl && inPlay(this)) ivey::Assist::trailStep(pl);
@@ -1191,8 +1206,9 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         warp.restore();
 
         // No sign of the step-size hook after a number of steps above 240 TPS: it is not installed here.
-        if (tps > 240.f && !bot.hookSeen && !bot.hookMissing && done > 0) {
-            bot.noHookCalls += done;
+        // (The first moments of a level do not count: the game does not ask for the step size while it only shows the opening.)
+        if (tps > 240.f && !bot.hookSeen && !bot.hookMissing && movedCalls > 0) {
+            bot.noHookCalls += movedCalls;
             if (bot.noHookCalls > 120) bot.hookMissing = true;
         }
 
@@ -1211,7 +1227,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         double consumed = simulated > 1e-9 ? simulated : callsTime;
 
         bot.tpsHonored = bot.stepAdvance <= 0.0 || std::abs(bot.stepAdvance - static_cast<double>(newDt)) < static_cast<double>(newDt) * 0.25;
-        bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(bot.leftOver) + static_cast<double>(dt) - consumed, -0.05, 1.0));
+        bot.leftOver = static_cast<float>(std::clamp(static_cast<double>(realDt) - consumed, -0.05, 1.0));
         if (paused) bot.leftOver = 0.f; // no time is saved up while paused
 
         // The first frames after a change are written one by one, to see how the loop starts.
@@ -1222,8 +1238,9 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
                       static_cast<double>(bot.leftOver), paused, warping ? "on" : "off", static_cast<double>(m_gameState.m_timeWarp));
         }
 
-        // The trajectory runs once per screen frame, outside the step budget.
+        // The hitboxes and the trajectory run once per screen frame, outside the step budget.
         if (auto pl = PlayLayer::get()) {
+            ivey::Assist::drawHitboxes(pl);
             if (!ivey::Trajectory::get().creating()) ivey::Trajectory::get().update(pl);
         }
     }
