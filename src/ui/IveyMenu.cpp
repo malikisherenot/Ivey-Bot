@@ -310,6 +310,8 @@ namespace ivey {
                               [] { return std::string(Bot::get().cfg.tpsLog ? "writing" : "off"); });
                         check("Light Steps (test)", c.lightSteps, nullptr,
                               [] { return std::string(Bot::get().cfg.lightSteps ? "visuals once per frame" : "off"); });
+                        check("TPS Hooks First (restart)", c.hooksFirst, nullptr,
+                              [] { return std::string(Bot::get().cfg.hooksFirst ? "before other mods" : "game order"); });
                     }
 
                     check("Position Correction", c.correction, nullptr,
