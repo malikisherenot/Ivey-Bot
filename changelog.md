@@ -1,5 +1,21 @@
 # Ivey Bot Changelog
 
+## v1.23.3
+
+- The TPS hooks only run before the hooks of other mods when asked for (developer setting "TPS Hooks First", restart needed). It was always on in v1.23.0 to v1.23.2, which changes the order the hooks of other bots run in, also at 240 TPS; the game's own order is back by default
+- The Pathfinder no longer forces the one-step-at-a-time loop while a replay plays. A replay at 240 TPS now steps exactly the way it was recorded, whatever the Pathfinder setting
+- Replay: when an attempt ends, the log says how many inputs were sent, how many were sent after their frame (and by how many frames at most), and the position fixes. That is the number to look at when a replay is not accurate
+
+## v1.23.2
+
+- Fixed: at the start of a level the game shows an opening and does not ask for the step size, so Ivey wrongly decided the step size hook was missing (and fell back to time warp) or that Single-Update TPS did not work. Only updates that moved the level count now, and Single-Update TPS needs three misses in a row
+- Hitboxes are drawn once per frame while the TPS loop makes steps. They were drawn after every step: with Show Hitboxes on, that was more than half of the time of a step at high TPS
+
+## v1.23.1
+
+- Fixed: at TPS above 240 every step loop (measured, classic and single update) lost about 4% of its steps at 720 TPS, because the part of a step left over from the last frame was thrown away. It is carried to the next frame now (a bigger backlog from slow frames is still not caught up). The loops got the speed of the time warp method or better
+- The "step hook is not running" and "device cannot keep up" notices in the log no longer fire by mistake at a restart or while the hook is called once per frame
+
 ## v1.23.0
 
 - Font: the menu and overlay use Roboto (the font Echo uses) instead of Abel. Delete resources/Abel-Regular.ttf and Abel-OFL.txt, add resources/Roboto-Medium.ttf and Roboto-NOTICE.txt
