@@ -1,5 +1,11 @@
 # Ivey Bot Changelog
 
+## v1.23.4
+
+- Fixed the build: the hitbox hook used `Bot` outside the ivey namespace (failed on every platform in v1.23.2 and v1.23.3)
+- Renderer: Auto uses the first encoder of the list again (software, as before v1.20.2). Hardware encoders are still there to pick by hand, and a later one is still tried when the first does not start. A render at 3x speed was reported and this was the one change to the video writing
+- Renderer: when a render ends, the log says how long the video is and how far the level moved. If the level moved more, the game ran fast between frames; if they are the same, the speed is lost when the video is written
+
 ## v1.23.3
 
 - The TPS hooks only run before the hooks of other mods when asked for (developer setting "TPS Hooks First", restart needed). It was always on in v1.23.0 to v1.23.2, which changes the order the hooks of other bots run in, also at 240 TPS; the game's own order is back by default
