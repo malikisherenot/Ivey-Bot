@@ -434,7 +434,9 @@ class $modify(IveyAssistLayer, PlayLayer) {
 
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
-        ivey::Assist::drawHitboxes(this);
+        // While the TPS loop makes many steps in a frame this is called after every one of them. The hitboxes are
+        // drawn once, after the loop (that was most of the time of a step with Show Hitboxes on).
+        if (!Bot::get().stepping) ivey::Assist::drawHitboxes(this);
     }
 
     void onQuit() {

@@ -30,6 +30,7 @@ namespace ivey {
         bool trajectoryRelease = true;
         bool preventDeath = false;   // pauses before a death
         int  preventFrames = 3;      // how many steps ahead it looks
+        bool hooksFirst = false;     // developer, needs a restart: the TPS hooks ask to run before the hooks of other mods
         bool pathfinder = false;     // Pathfinder (experimental): clicks by itself, tries inputs on a copy of the player and keeps the one that lives
         int  pathFrames = 24;        // how many steps ahead the Pathfinder looks
         bool pathP1 = true;          // the Pathfinder may press for player 1
@@ -123,6 +124,7 @@ namespace ivey {
         unsigned long long stepCalls = 0; // physics steps made so far (for the Steps/s readout)
         float simTps = 240.f;             // steps per second the game runs at now, the trajectory simulation steps the same way
         bool singleActive = false;        // single-update TPS: the step-size hook answers for the batch that is running
+        int singleMisses = 0;             // updates in a row that moved the level without the step hook running
         bool singleBroken = false;        // it did not work on this device, the normal loop is used instead
         int singleCount = 1;              // steps in the batch
         float singleTps = 240.f;
@@ -150,6 +152,8 @@ namespace ivey {
         size_t cursor = 0;
         size_t checkCursor = 0;
         int fixes = 0;
+        unsigned injected = 0, lateInputs = 0; // replay: inputs sent, and how many were sent after their frame
+        uint32_t maxLate = 0;                   // the most frames an input was late
         bool injecting = false;
         bool syncHolds = false;
 

@@ -35,6 +35,7 @@ namespace ivey {
         trajectoryRelease = m->getSavedValue<bool>("trajectory-release", true);
         preventDeath  = m->getSavedValue<bool>("prevent-death", false);
         preventFrames = m->getSavedValue<int>("prevent-frames", 3);
+        hooksFirst    = m->getSavedValue<bool>("hooks-first", false);
         pathfinder    = m->getSavedValue<bool>("auto-click", false); // still saved under the old name, so the setting stays
         pathFrames    = m->getSavedValue<int>("auto-frames", 24);
         pathP1        = m->getSavedValue<bool>("path-p1", true);
@@ -119,6 +120,7 @@ namespace ivey {
         m->setSavedValue("trajectory-release", trajectoryRelease);
         m->setSavedValue("prevent-death", preventDeath);
         m->setSavedValue("prevent-frames", preventFrames);
+        m->setSavedValue("hooks-first", hooksFirst);
         m->setSavedValue("auto-click", pathfinder);
         m->setSavedValue("auto-frames", pathFrames);
         m->setSavedValue("path-p1", pathP1);
@@ -189,6 +191,13 @@ namespace ivey {
 
     void Bot::onReset(uint32_t frame) {
         previousFrame = 0;
+        if (mode == Mode::Replay && injected > 0) {
+            log::info("Replay: the attempt sent {} inputs, {} of them late (up to {} frames), {} position fixes",
+                      injected, lateInputs, maxLate, fixes);
+        }
+        injected = 0;
+        lateInputs = 0;
+        maxLate = 0;
         if (mode == Mode::Record) {
             // Drop everything from this frame onward so practice restarts stay clean.
             // After a continue, the old part of the macro is never cut by a respawn at its end.
@@ -358,6 +367,13 @@ namespace ivey {
         }
 
         while (cursor < entries.size() && entries[cursor].frame <= frame) {
+            // An input should be sent in the step of its own frame. One that is sent later was missed by the
+            // step it belonged to (counted, to find out how closely a replay keeps its timing).
+            ++injected;
+            if (entries[cursor].frame < frame) {
+                ++lateInputs;
+                maxLate = std::max(maxLate, frame - entries[cursor].frame);
+            }
             inject(gl, entries[cursor]);
             ++cursor;
         }
