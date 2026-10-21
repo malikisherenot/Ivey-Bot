@@ -19,6 +19,9 @@ else()
     message(STATUS "Found Geode: $ENV{GEODE_SDK}")
 endif()
 
+# The prebuilt Codegen is the newest one; it must match the pinned bindings, so build it from them.
+set(SKIP_BUILDING_CODEGEN OFF CACHE BOOL "" FORCE)
+
 add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 
 setup_geode_mod(${PROJECT_NAME})
