@@ -32,6 +32,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pin bindings to the Geode version in mod.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(jq -r .geode mod.json)
+          git clone --quiet --filter=blob:none https://github.com/geode-sdk/bindings "$RUNNER_TEMP/bindings"
+          cd "$RUNNER_TEMP/bindings"
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            REF="v$V"
+          else
+            DATE=$(gh api "repos/geode-sdk/geode/releases/tags/v$V" --jq .published_at)
+            REF=$(git rev-list -1 --before="$DATE" origin/HEAD)
+          fi
+          echo "Bindings $REF for Geode $V"
+          git checkout --quiet "$REF"
+          echo "GEODE_BINDINGS_REPO_PATH=$PWD" >> "$GITHUB_ENV"
+
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
