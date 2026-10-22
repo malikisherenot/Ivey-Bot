@@ -1,6 +1,7 @@
 #pragma once
 #include <Geode/Geode.hpp>
 
+#include <atomic>
 #include <condition_variable>
 #include <filesystem>
 #include <deque>
@@ -62,6 +63,7 @@ namespace ivey {
         bool m_active = false;
         bool m_starting = false;
         bool m_capturing = false;
+        double m_levelStart = 0.0, m_levelLast = 0.0; // level time at the first and the last captured frame
         bool m_hidden = false; // the level is not drawn on the screen while the video is made
         int m_w = 1920;
         int m_h = 1080;
@@ -96,7 +98,9 @@ namespace ivey {
         std::condition_variable m_cv;
         std::deque<std::vector<uint8_t>> m_queue;
         std::vector<std::vector<uint8_t>> m_pool;
-        size_t m_maxQueue = 3;
+        size_t m_maxQueue = 4;
+        bool m_yuv = false;
+        std::atomic<long long> m_usTick{0}, m_usWait{0}, m_usConvert{0}, m_usEncode{0};
         bool m_done = false;
         bool m_failed = false;
         std::string m_error;

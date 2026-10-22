@@ -4,6 +4,7 @@
 #include <eclipse.ffmpeg-api/include/events.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +34,48 @@ namespace ivey {
 
         ffmpeg::events::Recorder* recorderOf(void* p) {
             return static_cast<ffmpeg::events::Recorder*>(p);
+        }
+
+
+        // RGB (bottom row first, as glReadPixels returns it) -> I420, BT.709 limited range, flipped upright.
+        // Splits the picture into bands and runs them on several threads.
+        inline void rgbToI420Flipped(uint8_t const* rgb, int w, int h, uint8_t* out) {
+            uint8_t* planeY = out;
+            uint8_t* planeU = out + static_cast<size_t>(w) * h;
+            uint8_t* planeV = planeU + static_cast<size_t>(w / 2) * (h / 2);
+            int const pairs = h / 2;
+
+            auto band = [=](int from, int to) {
+                for (int j = from; j < to; ++j) {
+                    int const y0 = 2 * j, y1 = 2 * j + 1;
+                    uint8_t const* s0 = rgb + static_cast<size_t>(h - 1 - y0) * w * 3;
+                    uint8_t const* s1 = rgb + static_cast<size_t>(h - 1 - y1) * w * 3;
+                    uint8_t* d0 = planeY + static_cast<size_t>(y0) * w;
+                    uint8_t* d1 = planeY + static_cast<size_t>(y1) * w;
+                    uint8_t* du = planeU + static_cast<size_t>(j) * (w / 2);
+                    uint8_t* dv = planeV + static_cast<size_t>(j) * (w / 2);
+                    for (int x = 0; x < w; x += 2) {
+                        int r[4], g[4], b[4];
+                        uint8_t const* p[4] = {s0 + x * 3, s0 + x * 3 + 3, s1 + x * 3, s1 + x * 3 + 3};
+                        for (int k = 0; k < 4; ++k) { r[k] = p[k][0]; g[k] = p[k][1]; b[k] = p[k][2]; }
+                        d0[x]     = static_cast<uint8_t>(((47 * r[0] + 157 * g[0] + 16 * b[0] + 128) >> 8) + 16);
+                        d0[x + 1] = static_cast<uint8_t>(((47 * r[1] + 157 * g[1] + 16 * b[1] + 128) >> 8) + 16);
+                        d1[x]     = static_cast<uint8_t>(((47 * r[2] + 157 * g[2] + 16 * b[2] + 128) >> 8) + 16);
+                        d1[x + 1] = static_cast<uint8_t>(((47 * r[3] + 157 * g[3] + 16 * b[3] + 128) >> 8) + 16);
+                        int const rs = r[0] + r[1] + r[2] + r[3], gs = g[0] + g[1] + g[2] + g[3], bs = b[0] + b[1] + b[2] + b[3];
+                        // sums of 4 pixels: shift by 10 instead of 8
+                        du[x / 2] = static_cast<uint8_t>(((-26 * rs - 86 * gs + 112 * bs + 512) >> 10) + 128);
+                        dv[x / 2] = static_cast<uint8_t>(((112 * rs - 102 * gs - 10 * bs + 512) >> 10) + 128);
+                    }
+                }
+            };
+
+            unsigned n = std::clamp(std::thread::hardware_concurrency(), 1u, 4u);
+            if (n == 1 || pairs < 8) { band(0, pairs); return; }
+            std::vector<std::thread> ts;
+            for (unsigned t = 1; t < n; ++t) ts.emplace_back(band, static_cast<int>(pairs * t / n), static_cast<int>(pairs * (t + 1) / n));
+            band(0, static_cast<int>(pairs / n));
+            for (auto& t : ts) t.join();
         }
 
         void put16(std::ofstream& f, uint16_t v) {
@@ -226,21 +269,15 @@ namespace ivey {
         return out;
     }
 
-    // The encoder that was picked, or for Auto every encoder that can be tried, hardware ones first:
-    // they leave the processor to the game. The first one that starts is used.
+    // The encoder that was picked, or for Auto every encoder that can be tried, in the order of the list.
+    // The first one that starts is used.
     std::vector<std::string> Renderer::candidateCodecs() const {
         auto list = codecs();
         auto const& want = Bot::get().cfg.renderCodec;
         if (!want.empty() && std::find(list.begin(), list.end(), want) != list.end()) return {want};
 
-        static char const* const hardware[] = {"h264_nvenc", "h264_videotoolbox", "h264_mediacodec", "h264_amf", "h264_qsv"};
-        std::vector<std::string> out;
-        for (auto name : hardware) {
-            if (std::find(list.begin(), list.end(), std::string(name)) != list.end()) out.push_back(name);
-        }
-        for (auto const& name : list) {
-            if (std::find(out.begin(), out.end(), name) == out.end()) out.push_back(name);
-        }
+        // Auto uses the first encoder of the list, as before. The ones after it are only tried when it does not start.
+        std::vector<std::string> out = list;
         return out;
     }
 
@@ -365,6 +402,9 @@ namespace ivey {
         m_audio = cfg.renderAudio;
         m_songFile.clear();
         m_songOffset = 0.0;
+        m_levelStart = pl ? pl->m_gameState.m_levelTime : 0.0;
+        m_levelLast = m_levelStart;
+
         if (m_audio && pl && pl->m_level) {
             std::string song = pl->m_level->getAudioFileName();
             if (pl->m_level->m_songID == 0) {
@@ -377,7 +417,11 @@ namespace ivey {
         }
 
         ffmpeg::RenderSettings settings;
-        settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
+        // Fast path: the picture is turned into YUV here (several threads, flipped upright) instead of inside
+        // FFmpeg, which does it on one thread and also runs a flip filter.
+        m_yuv = cfg.renderFastYuv && m_w % 2 == 0 && m_h % 2 == 0;
+        settings.m_pixelFormat = m_yuv ? ffmpeg::PixelFormat::YUV420P : ffmpeg::PixelFormat::RGB24;
+        settings.m_doVerticalFlip = !m_yuv;
         settings.m_bitrate = static_cast<int64_t>(std::clamp(cfg.renderBitrate, 1, 500)) * 1000000;
         settings.m_width = static_cast<uint32_t>(m_w);
         settings.m_height = static_cast<uint32_t>(m_h);
@@ -408,6 +452,11 @@ namespace ivey {
         m_usedCodec = codec;
         m_recorder = recorder;
         if (cfg.renderCodec.empty()) log::info("Render: encoder {} (auto)", codec);
+        {
+            std::string all;
+            for (auto const& c : candidates) all += c + " ";
+            log::info("Render: {}x{} at {} fps, encoders available: {}", m_w, m_h, m_fps, all);
+        }
 
         // the game is drawn at the video size from now on
         m_ogRes = CCEGLView::get()->getDesignResolutionSize();
@@ -434,6 +483,7 @@ namespace ivey {
         m_thread = std::thread(&Renderer::worker, this);
 
         m_frames = 0;
+        m_usTick = m_usWait = m_usConvert = m_usEncode = 0;
         m_warmup = 2;       // the first frames after the size change are skipped
         m_tailFrames = -1;
         m_active = true;
@@ -551,6 +601,8 @@ namespace ivey {
             return;
         }
 
+        auto tickStart = std::chrono::steady_clock::now();
+
         // draw the level into the hidden picture
         glViewport(0, 0, m_w, m_h);
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &m_oldFbo);
@@ -564,7 +616,9 @@ namespace ivey {
         m_capturing = false;
 
         // copy the pixels out
+        auto waitStart = std::chrono::steady_clock::now();
         auto buffer = takeBuffer();
+        m_usWait += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStart).count();
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
         glReadPixels(0, 0, m_w, m_h, GL_RGB, GL_UNSIGNED_BYTE, buffer.data());
 
@@ -578,6 +632,16 @@ namespace ivey {
         }
         m_cv.notify_all();
         ++m_frames;
+        m_usTick += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - tickStart).count();
+        if (m_frames % 300 == 0) {
+            auto avg = [&](std::atomic<long long>& v) { return static_cast<double>(v.exchange(0)) / 300000.0; };
+            log::info("Render timing per frame (ms): drawing+readback {:.1f} (of it waiting for the encoder {:.1f}) | convert {:.1f} | encode {:.1f}",
+                      avg(m_usTick), avg(m_usWait), avg(m_usConvert), avg(m_usEncode));
+            auto lv = PlayLayer::get() ? PlayLayer::get()->m_gameState.m_levelTime : m_levelLast;
+            log::info("Render: {} frames at {} fps = {:.2f} s of video, level moved {:.2f} s", m_frames, m_fps,
+                      static_cast<double>(m_frames) / m_fps, lv - m_levelStart);
+        }
+        m_levelLast = pl->m_gameState.m_levelTime;
 
         // a few seconds after the level ends are recorded too
         if (m_tailFrames >= 0 && --m_tailFrames <= 0) stop(false, "");
@@ -599,6 +663,7 @@ namespace ivey {
     // Hands the frames to the FFmpeg API one by one.
     void Renderer::worker() {
         auto rec = recorderOf(m_recorder);
+        std::vector<uint8_t> yuv;
 
         while (true) {
             std::vector<uint8_t> frame;
@@ -617,7 +682,18 @@ namespace ivey {
                 failed = m_failed;
             }
             if (!failed) {
-                auto res = rec->writeFrame(std::span<uint8_t const>(frame.data(), frame.size()));
+                using clock = std::chrono::steady_clock;
+                auto t0 = clock::now();
+                if (m_yuv) {
+                    yuv.resize(static_cast<size_t>(m_w) * m_h * 3 / 2);
+                    rgbToI420Flipped(frame.data(), m_w, m_h, yuv.data());
+                }
+                auto t1 = clock::now();
+                auto res = m_yuv ? rec->writeFrame(std::span<uint8_t const>(yuv.data(), yuv.size()))
+                                 : rec->writeFrame(std::span<uint8_t const>(frame.data(), frame.size()));
+                auto t2 = clock::now();
+                m_usConvert += std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                m_usEncode += std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
                 if (res.isErr()) {
                     std::lock_guard lock(m_lock);
                     m_failed = true;
@@ -662,6 +738,12 @@ namespace ivey {
         }
 
         auto& bot = Bot::get();
+        if (m_frames > 0 && m_fps > 0) {
+            // Both should be the same: if the level moved more than the video lasts, the game ran fast between the
+            // frames, if they are the same, the speed is lost when the video is written.
+            log::info("Render: {} frames at {} fps = {:.2f} s of video, the level moved {:.2f} s ({})",
+                      m_frames, m_fps, static_cast<double>(m_frames) / static_cast<double>(m_fps), m_levelLast - m_levelStart, m_usedCodec);
+        }
         std::string message;
         bool addAudio = error.empty() && m_audio && m_frames > 0;
         if (!error.empty()) message = "Render failed: " + error;
