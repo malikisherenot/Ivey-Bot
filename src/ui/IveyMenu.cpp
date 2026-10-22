@@ -585,6 +585,7 @@ namespace ivey {
                              [](double v) { auto& c = Bot::get().cfg; c.renderBitrate = static_cast<int>(std::lround(v)); c.save(); });
 
                     check("Render Audio", c.renderAudio);
+                    check("Fast Convert", c.renderFastYuv);
 
                     action("Seconds After End", nullptr, [] { return std::to_string(Bot::get().cfg.renderTail); });
                     editable("Seconds recorded after the level ends", [] { return std::to_string(Bot::get().cfg.renderTail); }, 0, 60,
