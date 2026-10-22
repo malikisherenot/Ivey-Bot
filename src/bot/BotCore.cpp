@@ -52,6 +52,7 @@ namespace ivey {
         renderTail    = m->getSavedValue<int>("render-tail", 2);
         renderCodec   = m->getSavedValue<std::string>("render-codec", "");
         renderAudio   = m->getSavedValue<bool>("render-audio", true);
+        renderFastYuv = m->getSavedValue<bool>("render-fast-yuv", true);
         corrInterval  = m->getSavedValue<int>("corr-interval", 4);
         tpsClassic    = m->getSavedValue<bool>("tps-classic", false);
         lightSteps    = m->getSavedValue<bool>("light-steps", false);
@@ -137,6 +138,7 @@ namespace ivey {
         m->setSavedValue("render-tail", renderTail);
         m->setSavedValue("render-codec", renderCodec);
         m->setSavedValue("render-audio", renderAudio);
+        m->setSavedValue("render-fast-yuv", renderFastYuv);
         m->setSavedValue("corr-interval", corrInterval);
         m->setSavedValue("tps-classic", tpsClassic);
         m->setSavedValue("light-steps", lightSteps);

@@ -45,6 +45,7 @@ namespace ivey {
         int  renderFps = 60;
         int  renderBitrate = 30;   // Mbps
         int  renderTail = 2;       // seconds recorded after the level ends
+        bool renderFastYuv = true; // convert to YUV on several threads instead of inside FFmpeg
         bool renderAudio = true;   // the level song is added to the video
         std::string renderCodec;   // empty = pick one automatically
         int  corrInterval = 4;
