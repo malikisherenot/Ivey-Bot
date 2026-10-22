@@ -204,6 +204,114 @@ namespace ivey {
             return true;
         }
 
+
+        // Same part of the song as decodeSong, but as stereo float samples at 44100 Hz, which is what
+        // AudioMixer::mixVideoRaw takes. Used when the FFmpeg API does not accept the WAV file.
+        bool decodeSongRaw(std::string const& file, double offset, double duration, std::vector<float>& out) {
+            auto engine = FMODAudioEngine::sharedEngine();
+            if (!engine || !engine->m_system || file.empty()) return false;
+            if (duration <= 0.0 || duration > 1500.0) return false; // keeps the memory use reasonable
+
+            FMOD::Sound* sound = nullptr;
+            if (engine->m_system->createSound(file.c_str(), FMOD_OPENONLY | FMOD_ACCURATETIME, nullptr, &sound) != FMOD_OK || !sound) {
+                return false;
+            }
+
+            FMOD_SOUND_TYPE type;
+            FMOD_SOUND_FORMAT format;
+            int channels = 0, bits = 0;
+            float freq = 0.f;
+            int priority = 0;
+            sound->getFormat(&type, &format, &channels, &bits);
+            sound->getDefaults(&freq, &priority);
+
+            bool isFloat = format == FMOD_SOUND_FORMAT_PCMFLOAT;
+            bool is16 = format == FMOD_SOUND_FORMAT_PCM16;
+            if ((!isFloat && !is16) || channels < 1 || freq < 8000.f) {
+                sound->release();
+                return false;
+            }
+
+            uint32_t rate = static_cast<uint32_t>(std::lround(freq));
+            size_t sampleBytes = isFloat ? 4 : 2;
+            size_t frameBytes = sampleBytes * static_cast<size_t>(channels);
+            uint64_t totalFrames = static_cast<uint64_t>(duration * rate);
+            if (totalFrames == 0) {
+                sound->release();
+                return false;
+            }
+
+            std::vector<float> src;
+            src.reserve(static_cast<size_t>(totalFrames) * 2);
+            uint64_t written = 0;
+
+            if (offset < 0.0) {
+                uint64_t silent = std::min<uint64_t>(totalFrames, static_cast<uint64_t>(-offset * rate));
+                src.resize(static_cast<size_t>(silent) * 2, 0.f);
+                written = silent;
+            }
+            else if (offset > 0.0) {
+                sound->seekData(static_cast<unsigned int>(offset * rate));
+            }
+
+            constexpr size_t CHUNK = 8192;
+            std::vector<uint8_t> raw(CHUNK * frameBytes);
+            while (written < totalFrames) {
+                unsigned int got = 0;
+                auto want = static_cast<unsigned int>(std::min<uint64_t>(CHUNK, totalFrames - written) * frameBytes);
+                FMOD_RESULT res = sound->readData(raw.data(), want, &got);
+                size_t frames = got / frameBytes;
+                if (frames == 0) break;
+
+                for (size_t k = 0; k < frames; ++k) {
+                    float v[2] = {0.f, 0.f};
+                    for (int ch = 0; ch < 2 && ch < channels; ++ch) {
+                        uint8_t const* q = raw.data() + k * frameBytes + static_cast<size_t>(ch) * sampleBytes;
+                        if (isFloat) {
+                            float f;
+                            std::memcpy(&f, q, 4);
+                            v[ch] = f;
+                        }
+                        else {
+                            int16_t i;
+                            std::memcpy(&i, q, 2);
+                            v[ch] = static_cast<float>(i) / 32768.f;
+                        }
+                    }
+                    if (channels == 1) v[1] = v[0];
+                    src.push_back(std::clamp(v[0], -1.f, 1.f));
+                    src.push_back(std::clamp(v[1], -1.f, 1.f));
+                }
+                written += frames;
+                if (res != FMOD_OK) break;
+            }
+            sound->release();
+
+            src.resize(static_cast<size_t>(totalFrames) * 2, 0.f); // silence up to the video length
+
+            if (rate == 44100) {
+                out = std::move(src);
+                return true;
+            }
+
+            // linear resampling to 44100 Hz
+            uint64_t outFrames = static_cast<uint64_t>(duration * 44100.0);
+            out.assign(static_cast<size_t>(outFrames) * 2, 0.f);
+            double step = static_cast<double>(rate) / 44100.0;
+            for (uint64_t i = 0; i < outFrames; ++i) {
+                double pos = static_cast<double>(i) * step;
+                size_t i0 = static_cast<size_t>(pos);
+                size_t i1 = std::min<size_t>(i0 + 1, static_cast<size_t>(totalFrames) - 1);
+                i0 = std::min<size_t>(i0, static_cast<size_t>(totalFrames) - 1);
+                float frac = static_cast<float>(pos - static_cast<double>(i0));
+                for (int ch = 0; ch < 2; ++ch) {
+                    float a = src[i0 * 2 + ch], b = src[i1 * 2 + ch];
+                    out[static_cast<size_t>(i) * 2 + ch] = a + (b - a) * frac;
+                }
+            }
+            return true;
+        }
+
         // Adds the song to the finished video. Returns an empty string on success, otherwise why not.
         std::string addSong(std::filesystem::path const& video, std::string const& song, double offset,
                             double duration, std::filesystem::path const& tempDir) {
@@ -227,10 +335,27 @@ namespace ivey {
             // The FFmpeg API on a device may not read WAV files. The level's own song file is what
             // the xdBot renderer gives it, so that is tried next (its start may then be a bit off).
             if (res.isErr() && audioFile == wav) {
+                log::warn("Audio: the WAV file was not accepted ({}), trying raw samples", firstError);
                 std::filesystem::remove(tmp, ec);
-                res = ffmpeg::events::AudioMixer::mixVideoAudio(video, song, tmp);
-                if (res.isOk() && std::abs(offset) > 0.05) {
-                    log::warn("Audio added from the song file, it may be {:.2f} seconds off", offset);
+
+                // Raw samples keep the song's start offset and need no file format at all.
+                std::vector<float> raw;
+                bool rawOk = decodeSongRaw(song, offset, duration, raw);
+                if (rawOk) {
+                    res = ffmpeg::events::AudioMixer::mixVideoRaw(video, std::span<float>(raw.data(), raw.size()), tmp);
+                    if (res.isOk()) log::info("Audio added from raw samples, starting {:.2f} s into the song", offset);
+                    else log::warn("Audio: raw samples were not accepted either: {}", res.unwrapErr());
+                }
+                else {
+                    log::warn("Audio: the song could not be read as raw samples");
+                }
+
+                if (!rawOk || res.isErr()) {
+                    std::filesystem::remove(tmp, ec);
+                    res = ffmpeg::events::AudioMixer::mixVideoAudio(video, song, tmp);
+                    if (res.isOk() && std::abs(offset) > 0.05) {
+                        log::warn("Audio added from the song file, it may be {:.2f} seconds off", offset);
+                    }
                 }
             }
             std::filesystem::remove(wav, ec);
@@ -611,9 +736,29 @@ namespace ivey {
         glClear(GL_COLOR_BUFFER_BIT);
 
         showWorld(true);
+        // The HUD was laid out for the phone's wide screen; the video is 16:9. Centered and right-aligned
+        // texts would land too far right, so their x is scaled to the video width for this one draw.
+        std::vector<std::pair<CCNode*, float>> moved;
+        float hudScale = m_ogRes.width > 0.f ? (320.f * static_cast<float>(m_w) / static_cast<float>(m_h)) / m_ogRes.width : 1.f;
+        if (std::abs(hudScale - 1.f) > 0.01f) {
+            auto shift = [&](CCNode* node) {
+                moved.emplace_back(node, node->getPositionX());
+                node->setPositionX(node->getPositionX() * hudScale);
+            };
+            if (pl->m_uiLayer && pl->m_uiLayer->getChildren()) {
+                for (auto child : CCArrayExt<CCNode*>(pl->m_uiLayer->getChildren())) shift(child);
+            }
+            if (pl->getChildren()) {
+                for (auto child : CCArrayExt<CCNode*>(pl->getChildren())) {
+                    if (typeinfo_cast<CCLabelBMFont*>(child)) shift(child); // the percentage label and similar texts
+                }
+            }
+        }
+
         m_capturing = true;
         pl->visit();
         m_capturing = false;
+        for (auto& [node, x] : moved) node->setPositionX(x);
 
         // copy the pixels out
         auto waitStart = std::chrono::steady_clock::now();
