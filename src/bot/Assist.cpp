@@ -6,6 +6,7 @@
 #include <Geode/modify/PlayLayer.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
 
@@ -72,21 +73,40 @@ namespace ivey::Assist {
         constexpr int NONE = INT_MAX; // no death inside the look
         constexpr auto JUMP = static_cast<PlayerButton>(1);
 
+        // One press or release, `step` steps from the start of a plan.
+        struct Ev {
+            int step;
+            bool press;
+        };
+
+        // A path that was found to live through the whole look ahead: the inputs to give, and where the
+        // players should be after every step (to notice when reality leaves the plan).
+        struct Plan {
+            bool active = false;
+            int k = 0;                       // steps done since the plan began
+            int last = 0;                    // step of the last event
+            std::vector<Ev> events;
+            std::vector<CCPoint> points[2];  // predicted position of P1 / P2 before each step
+        };
+
         // What the Pathfinder remembers during one attempt.
         struct PathState {
             int skip = 0;                      // steps that need no look: nothing can reach the look ahead before then
-            bool release[2] = {false, false};  // a swift tap is on: let go on the next step
             bool held[2] = {false, false};     // the button as it was after the last decision
             int lastLife = NONE;               // steps to death with the input as it was, at the last look
-            int checks = 0, flips = 0, swifts = 0, skipped = 0;
+            Plan plan[2];
+            int checks = 0, plans = 0, partials = 0, drifts = 0, skipped = 0;
         };
         PathState s_path;
 
-        enum class Move { Keep, Flip, Swift };
+        constexpr double SEARCH_BUDGET_MS = 30.0; // one search never takes longer than this
+        constexpr float DRIFT = 1.5f;             // how far the real player may be from the plan
+        constexpr int WINDOW_EXTRA = 6;           // how far the window of a good start is measured
 
-        // Steps until the first death of the players one button controls if the button does `move`
-        // (a swift is: hold for this step, let go on the next one).
-        int lifeOfMove(PlayLayer* pl, bool linked, int controller, bool holding, Move move, int horizon) {
+        // Steps until the first death of the players one button controls, if the button is `holding` at
+        // step 0 and then gets the events. Fills the predicted points when asked.
+        int lifeOfPlan(PlayLayer* pl, bool linked, int controller, bool holding, std::vector<Ev> const& events,
+                       int horizon, std::vector<CCPoint>* points0 = nullptr, std::vector<CCPoint>* points1 = nullptr) {
             auto& t = Trajectory::get();
             int worst = NONE;
             int first = linked ? 0 : controller;
@@ -96,20 +116,89 @@ namespace ivey::Assist {
                 PlayerObject* copy = t.copyFor(p);
                 if (!real || !copy || real->m_isDead) continue;
 
-                bool wantHold = move == Move::Keep ? holding : (move == Move::Flip ? !holding : true);
-                bool tap = move == Move::Swift;
-                Path path = t.simulate(pl, real, copy, horizon, [wantHold, tap](int step, PlayerObject* c) {
+                Path path = t.simulate(pl, real, copy, horizon, [holding, &events](int step, PlayerObject* c) {
                     if (step == 0) {
-                        if (wantHold) c->pushButton(JUMP);
+                        if (holding) c->pushButton(JUMP);
                         else c->releaseButton(JUMP);
                     }
-                    else if (step == 1 && tap) {
-                        c->releaseButton(JUMP);
+                    for (auto const& e : events) {
+                        if (e.step != step) continue;
+                        if (e.press) c->pushButton(JUMP);
+                        else c->releaseButton(JUMP);
                     }
                 });
                 if (path.died) worst = std::min(worst, path.deathFrame);
+                auto* out = p == 0 ? points0 : points1;
+                if (out) *out = std::move(path.points);
             }
             return worst;
+        }
+
+        // A start `delay` steps from now, holding or letting go for `length` steps (0 = for good).
+        std::vector<Ev> makeEvents(bool holding, int delay, int length) {
+            std::vector<Ev> ev;
+            ev.push_back({delay, !holding});
+            if (length > 0) ev.push_back({delay + length, holding});
+            return ev;
+        }
+
+        // Looks for a way to live through the whole look ahead. Returns true and fills `plan` if there is one.
+        // When there is none, `bestLife` / `bestEvents` tell the way that lived longest.
+        bool findPlan(PlayLayer* pl, bool linked, int controller, bool holding, int ahead, int keepLife,
+                      Plan& plan, int& bestLife, std::vector<Ev>& bestEvents) {
+            static constexpr int LENGTHS[] = {1, 2, 3, 4, 6, 9, 14, 0};
+            auto began = std::chrono::steady_clock::now();
+            auto overBudget = [&] {
+                return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count() > SEARCH_BUDGET_MS;
+            };
+
+            int maxDelay = std::clamp(keepLife == NONE ? ahead : keepLife, 1, 24); // acting after the death is too late
+            bestLife = keepLife;
+            bestEvents.clear();
+
+            auto survives = [&](int delay, int length) {
+                return lifeOfPlan(pl, linked, controller, holding, makeEvents(holding, delay, length), ahead) == NONE;
+            };
+
+            // earliest start that lives, and which lengths live at that start
+            for (int d = 0; d < maxDelay; ++d) {
+                std::vector<int> good;
+                for (int length : LENGTHS) {
+                    auto ev = makeEvents(holding, d, length);
+                    int life = lifeOfPlan(pl, linked, controller, holding, ev, ahead);
+                    if (life == NONE) good.push_back(length);
+                    else if (life > bestLife || (bestEvents.empty() && life >= bestLife)) {
+                        bestLife = life;
+                        bestEvents = ev;
+                    }
+                    if (overBudget()) break;
+                }
+
+                if (!good.empty()) {
+                    // How wide is the window of starts that live, for each length? The widest is the
+                    // safest, and its middle leaves room on both sides.
+                    int bestLen = good[0], bestFrom = d, bestTo = d;
+                    for (int length : good) {
+                        int to = d;
+                        while (to + 1 < d + WINDOW_EXTRA && to + 1 < maxDelay && survives(to + 1, length)) ++to;
+                        if (to - d > bestTo - bestFrom) {
+                            bestLen = length;
+                            bestFrom = d;
+                            bestTo = to;
+                        }
+                    }
+
+                    int start = (bestFrom + bestTo) / 2;
+                    plan = Plan();
+                    plan.events = makeEvents(holding, start, bestLen);
+                    plan.last = plan.events.back().step;
+                    lifeOfPlan(pl, linked, controller, holding, plan.events, ahead, &plan.points[0], &plan.points[1]);
+                    plan.active = true;
+                    return true;
+                }
+                if (overBudget()) break;
+            }
+            return false;
         }
     }
 
@@ -129,22 +218,49 @@ namespace ivey::Assist {
         bool linked = dual && !twoPlayer; // one button drives both players
         int controllers = (dual && twoPlayer) ? 2 : 1;
 
-        // A swift tap that was started on the last step ends now.
         bool acted = false;
+        bool busy[2] = {false, false};
+
+        // A plan that was found keeps running until its last input is given.
         for (int c = 0; c < controllers; ++c) {
-            if (!s_path.release[c]) continue;
-            s_path.release[c] = false;
-            pl->handleButton(false, 1, c == 0);
-            s_path.held[c] = false;
-            acted = true;
+            auto& plan = s_path.plan[c];
+            if (!plan.active) continue;
+
+            // Is the real player where the plan said it would be?
+            bool drifted = false;
+            for (int p = 0; p < 2; ++p) {
+                PlayerObject* real = p == 0 ? pl->m_player1 : pl->m_player2;
+                if (!real || real->m_isDead || plan.points[p].size() <= static_cast<size_t>(plan.k)) continue;
+                if (!linked && p != c) continue;
+                CCPoint want = plan.points[p][plan.k];
+                CCPoint now = real->getPosition();
+                if (std::hypot(now.x - want.x, now.y - want.y) > DRIFT) drifted = true;
+            }
+            if (drifted) {
+                plan.active = false;
+                ++s_path.drifts;
+                continue; // look again below
+            }
+
+            for (auto const& e : plan.events) {
+                if (e.step != plan.k) continue;
+                pl->handleButton(e.press, 1, c == 0);
+                s_path.held[c] = e.press;
+                acted = true;
+            }
+            ++plan.k;
+            if (plan.k > plan.last) plan.active = false;
+            busy[c] = true;
         }
-        if (acted) {
+        if (busy[0] || busy[1]) {
             s_path.skip = 0;
-            return true;
+            bool all = true;
+            for (int c = 0; c < controllers; ++c) all = all && busy[c];
+            if (all) return acted;
         }
 
         // Nothing changed from outside and nothing can reach the look ahead yet: no need to look this step.
-        if (s_path.skip > 0) {
+        if (s_path.skip > 0 && !busy[0] && !busy[1]) {
             bool same = true;
             for (int c = 0; c < controllers; ++c) {
                 PlayerObject* real = c == 0 ? pl->m_player1 : pl->m_player2;
@@ -159,18 +275,19 @@ namespace ivey::Assist {
         }
 
         ++s_path.checks;
-        int horizon = ahead * 2; // the first half decides, the second half tells how long the next look can wait
+        int horizon = ahead * 2; // tells how long the next look can wait
         int skip = NONE;
         int worstKeep = NONE;
 
         for (int c = 0; c < controllers; ++c) {
+            if (busy[c]) continue;
             PlayerObject* real = c == 0 ? pl->m_player1 : pl->m_player2;
             if (!real || real->m_isDead) continue;
             bool holding = real->m_jumpBuffered;
             s_path.held[c] = holding;
             if (!(c == 0 ? cfg.pathP1 : cfg.pathP2)) continue;
 
-            int keep = lifeOfMove(pl, linked, c, holding, Move::Keep, horizon);
+            int keep = lifeOfPlan(pl, linked, c, holding, {}, horizon);
             worstKeep = std::min(worstKeep, keep);
 
             if (keep >= ahead) {
@@ -179,24 +296,35 @@ namespace ivey::Assist {
                 continue;
             }
 
-            int flip = lifeOfMove(pl, linked, c, holding, Move::Flip, horizon);
-            int swift = holding ? -1 : lifeOfMove(pl, linked, c, holding, Move::Swift, horizon);
-            int best = std::max(flip, swift);
-            bool imminent = keep <= 1; // the very next step kills: nothing to lose by trying
-
-            if (best > keep || (imminent && best >= keep)) {
-                if (swift > flip) {
-                    pl->handleButton(true, 1, c == 0);
-                    s_path.release[c] = true;
-                    s_path.held[c] = true;
-                    ++s_path.swifts;
+            // A death is inside the look ahead: find a path that lives through all of it and follow it.
+            Plan found;
+            int bestLife = keep;
+            std::vector<Ev> bestEvents;
+            if (findPlan(pl, linked, c, holding, ahead, keep, found, bestLife, bestEvents)) {
+                ++s_path.plans;
+                s_path.plan[c] = std::move(found);
+                auto& plan = s_path.plan[c];
+                for (auto const& e : plan.events) {
+                    if (e.step != 0) continue;
+                    pl->handleButton(e.press, 1, c == 0);
+                    s_path.held[c] = e.press;
+                    acted = true;
                 }
-                else {
-                    pl->handleButton(!holding, 1, c == 0);
-                    s_path.held[c] = !holding;
-                    ++s_path.flips;
+                plan.k = 1;
+                if (plan.k > plan.last) plan.active = false;
+            }
+            else if (!bestEvents.empty()) {
+                // Nothing lives through all of it: take the way that lives longest, if it starts now.
+                bool imminent = keep <= 1;
+                if (bestLife > keep || (imminent && bestLife >= keep)) {
+                    for (auto const& e : bestEvents) {
+                        if (e.step != 0) continue;
+                        pl->handleButton(e.press, 1, c == 0);
+                        s_path.held[c] = e.press;
+                        acted = true;
+                        ++s_path.partials;
+                    }
                 }
-                acted = true;
             }
             skip = 0; // a death is close: look again on the next step
         }
@@ -212,9 +340,9 @@ namespace ivey::Assist {
 
         std::string seen = s_path.lastLife == NONE ? std::string("no death") : fmt::format("a death in {} steps", s_path.lastLife);
         log::info("Pathfinder: died at x {:.0f}, {:.2f}s into the attempt. Last look saw {} (look ahead {}). "
-                  "{} looks, {} steps skipped, {} flips, {} swifts. Step {:.4f} ({:.0f} TPS)",
+                  "{} looks, {} steps skipped, {} plans, {} partial moves, {} drifts. Step {:.4f} ({:.0f} TPS)",
                   player->getPositionX(), pl->m_gameState.m_levelTime, seen, bot.cfg.pathFrames,
-                  s_path.checks, s_path.skipped, s_path.flips, s_path.swifts, 60.f / std::max(bot.simTps, 1.f), bot.simTps);
+                  s_path.checks, s_path.skipped, s_path.plans, s_path.partials, s_path.drifts, 60.f / std::max(bot.simTps, 1.f), bot.simTps);
     }
 
     int deathIn(PlayLayer* pl, int frames, int* who) {

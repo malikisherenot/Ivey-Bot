@@ -11,10 +11,11 @@ namespace ivey {
         // `who` gets the player (0 or 1).
         int deathIn(PlayLayer* pl, int frames, int* who);
 
-        // Pathfinder (experimental). Called before every physics step. For each button it tries, on a copy of
-        // the player, keeping the input, flipping it, and a swift tap (hold for one step). It acts when a death
-        // is inside the look ahead and another move lives longer (or the death is the very next step).
-        // The look is done over twice the look ahead, and steps in which nothing can reach it are skipped.
+        // Pathfinder (experimental). Called before every physics step. When the current input would die inside
+        // the look ahead, it tries starts (now or a few steps later) and hold lengths on a copy of the player.
+        // The first path that lives through the whole look ahead is taken: the middle of its window of good
+        // starts is used, and the plan is followed until its last input, unless the real player leaves it.
+        // If nothing lives through all of it, the way that lives longest is taken when it starts now.
         // Returns true if it pressed or released something.
         bool pathfinder(PlayLayer* pl, int ahead);
 
