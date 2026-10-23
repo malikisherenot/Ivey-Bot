@@ -10,7 +10,19 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 project(IveyBot VERSION 1.0.0)
 
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
+# Explicit list: stray/old files left in the repo (e.g. src/render/IveyMenu.cpp) are ignored.
+set(SOURCES
+    src/main.cpp
+    src/bot/Assist.cpp
+    src/bot/BotCore.cpp
+    src/bot/Import.cpp
+    src/bot/Macro.cpp
+    src/bot/Trajectory.cpp
+    src/clickbot/Clickbot.cpp
+    src/render/Renderer.cpp
+    src/ui/IveyMenu.cpp
+    src/ui/ThemeFx.cpp
+)
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 
 if (NOT DEFINED ENV{GEODE_SDK})

@@ -1,5 +1,15 @@
 # Ivey Bot Changelog
 
+## v1.24.0
+
+- New: Clickbot. Click sounds while you play or a macro plays, for player 1 and player 2 (own pack and volume each). A pack can have clicks, releases and soft, hard and micro versions; the kind is picked by how long it has been since the last click
+- Clickbot tab, two views: Local (packs on this device) and Online (ClickpackDB, db.ruikasa.lol). Tapping an online pack downloads it into the `clickpacks` folder of the mod, unpacks it and it shows up under Local. Packs have a filter by name
+- Two click packs come with the mod: Viper 8k (yen) and M4rk's Clicks
+- Macro browser: shows every macro, newest first, and scrolls (it stopped at 5 before)
+- Renderer: Fast Convert (the video frames are converted to YUV on several threads), timing lines in the log every 300 frames, and the HUD texts are placed for the video width so they are not pushed to the right
+- Renderer: when the FFmpeg API does not take the WAV, the song goes in as raw samples and keeps its start offset
+- Pathfinder: finds a path that lives through the whole look ahead, follows it until its last input and drops it when the player leaves it
+
 ## v1.23.4
 
 - Fixed the build: the hitbox hook used `Bot` outside the ivey namespace (failed on every platform in v1.23.2 and v1.23.3)
