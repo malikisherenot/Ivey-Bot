@@ -53,6 +53,12 @@ namespace ivey {
         renderCodec   = m->getSavedValue<std::string>("render-codec", "");
         renderAudio   = m->getSavedValue<bool>("render-audio", true);
         renderFastYuv = m->getSavedValue<bool>("render-fast-yuv", true);
+        clickbot      = m->getSavedValue<bool>("clickbot", false);
+        clickPack     = m->getSavedValue<std::string>("click-pack", "b:yen-viper-8k");
+        clickPack2    = m->getSavedValue<std::string>("click-pack-2", "");
+        clickVolume   = std::clamp(m->getSavedValue<int>("click-volume", 100), 0, 1000);
+        clickVolume2  = std::clamp(m->getSavedValue<int>("click-volume-2", 100), 0, 1000);
+        clickKinds    = m->getSavedValue<bool>("click-kinds", true);
         corrInterval  = m->getSavedValue<int>("corr-interval", 4);
         tpsClassic    = m->getSavedValue<bool>("tps-classic", false);
         lightSteps    = m->getSavedValue<bool>("light-steps", false);
@@ -139,6 +145,12 @@ namespace ivey {
         m->setSavedValue("render-codec", renderCodec);
         m->setSavedValue("render-audio", renderAudio);
         m->setSavedValue("render-fast-yuv", renderFastYuv);
+        m->setSavedValue("clickbot", clickbot);
+        m->setSavedValue("click-pack", clickPack);
+        m->setSavedValue("click-pack-2", clickPack2);
+        m->setSavedValue("click-volume", clickVolume);
+        m->setSavedValue("click-volume-2", clickVolume2);
+        m->setSavedValue("click-kinds", clickKinds);
         m->setSavedValue("corr-interval", corrInterval);
         m->setSavedValue("tps-classic", tpsClassic);
         m->setSavedValue("light-steps", lightSteps);

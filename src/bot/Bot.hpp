@@ -45,6 +45,12 @@ namespace ivey {
         int  renderFps = 60;
         int  renderBitrate = 30;   // Mbps
         int  renderTail = 2;       // seconds recorded after the level ends
+        bool clickbot = false;       // click sounds while playing
+        std::string clickPack = "b:yen-viper-8k"; // pack of player 1 ("b:" built in, "l:" downloaded)
+        std::string clickPack2;      // pack of player 2, empty = the one of player 1
+        int  clickVolume = 100;      // percent
+        int  clickVolume2 = 100;
+        bool clickKinds = true;      // soft, hard and micro clicks, when the pack has them
         bool renderFastYuv = true; // convert to YUV on several threads instead of inside FFmpeg
         bool renderAudio = true;   // the level song is added to the video
         std::string renderCodec;   // empty = pick one automatically
