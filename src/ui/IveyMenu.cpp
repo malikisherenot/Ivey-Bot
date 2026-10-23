@@ -1,4 +1,6 @@
 #include "IveyMenu.hpp"
+#include "../clickbot/Clickbot.hpp"
+#include "../clickbot/ClickUtil.hpp"
 #include "ThemeFx.hpp"
 #include "../bot/Bot.hpp"
 #include "../render/Renderer.hpp"
@@ -31,11 +33,12 @@ namespace ivey {
         constexpr int TAB_TRAJECTORY = 8;
         constexpr int TAB_SEARCH = 9;
         constexpr int TAB_RENDER = 10;
+        constexpr int TAB_CLICK = 11;
         const char* TAB_NAMES[] = {"Gameplay", "Bot", "Macro", "Physics", "", "Visual",
-                                   "Theme", "Labels", "Assist", "Search", "Render"};
+                                   "Theme", "Labels", "Assist", "Search", "Render", "Clickbot"};
 
         std::vector<int> tabOrder(bool searchOpen) {
-            std::vector<int> order = {1, TAB_MACRO, 0, TAB_TRAJECTORY, TAB_RENDER}; // Bot and Macro first
+            std::vector<int> order = {1, TAB_MACRO, 0, TAB_TRAJECTORY, TAB_RENDER, TAB_CLICK}; // Bot and Macro first
             if (searchOpen) order.push_back(TAB_SEARCH);
             for (int id : {5, 6}) order.push_back(id);
             return order;
@@ -607,22 +610,177 @@ namespace ivey {
                     });
                     break;
                 }
+                case 11: { // Clickbot
+                    auto& cb = Clickbot::get();
+                    auto shorten = [](std::string text, size_t n) {
+                        return text.size() > n ? text.substr(0, n - 1) + "~" : text;
+                    };
+                    auto sizeText = [](uint64_t bytes) {
+                        if (bytes == 0) return std::string();
+                        if (bytes < 1024 * 1024) return fmt::format("{} KB", std::max<uint64_t>(1, bytes / 1024));
+                        return fmt::format("{:.1f} MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+                    };
+                    // The pack a tap chooses, for the player the list is set to.
+                    auto choose = [](std::string const& id) {
+                        auto& cfg = Bot::get().cfg;
+                        auto& cbot = Clickbot::get();
+                        (cbot.player == 0 ? cfg.clickPack : cfg.clickPack2) = id;
+                        cfg.save();
+                        cbot.selectionChanged();
+                        Bot::get().status = id.empty() ? "No click pack" : "Click pack chosen";
+                    };
+                    // Which players use a pack: "P1", "P2" or both.
+                    auto usedBy = [](std::string const& id) {
+                        auto const& cfg = Bot::get().cfg;
+                        bool p1 = cfg.clickPack == id;
+                        bool p2 = (cfg.clickPack2.empty() ? cfg.clickPack : cfg.clickPack2) == id;
+                        if (p1 && p2) return std::string("P1+P2");
+                        return std::string(p1 ? "P1" : (p2 ? "P2" : ""));
+                    };
+
+                    check("Clickbot", c.clickbot, nullptr,
+                          [] { return std::string(Bot::get().cfg.clickbot ? "on" : "off"); });
+
+                    // the two tabs of the Clickbot
+                    action("Local", [] { auto& k = Clickbot::get(); k.sub = 0; k.touch(); },
+                           [] { return std::string(Clickbot::get().sub == 0 ? "open" : ""); });
+                    r.back().box = true;
+                    action("Online", [] { auto& k = Clickbot::get(); k.sub = 1; k.loadOnline(false); k.touch(); },
+                           [] { return std::string(Clickbot::get().sub == 1 ? "open" : ""); });
+                    r.back().box = true;
+
+                    action("Player", [] { auto& k = Clickbot::get(); k.player = 1 - k.player; k.touch(); },
+                           [] { return std::string(Clickbot::get().player == 0 ? "Player 1" : "Player 2"); });
+                    action("Volume", nullptr, [] {
+                        auto const& cfg = Bot::get().cfg;
+                        return fmt::format("{}%", Clickbot::get().player == 0 ? cfg.clickVolume : cfg.clickVolume2);
+                    });
+                    editable("Click volume (%)", [] {
+                        auto const& cfg = Bot::get().cfg;
+                        return std::to_string(Clickbot::get().player == 0 ? cfg.clickVolume : cfg.clickVolume2);
+                    }, 0, 1000, [](double v) {
+                        auto& cfg = Bot::get().cfg;
+                        (Clickbot::get().player == 0 ? cfg.clickVolume : cfg.clickVolume2) = static_cast<int>(std::lround(v));
+                        cfg.save();
+                    });
+                    check("Soft, Hard & Micro Clicks", c.clickKinds, nullptr,
+                          [] { return std::string(Bot::get().cfg.clickKinds ? "when the pack has them" : "off"); });
+
+                    if (cb.sub == 0) {
+                        // ----- packs on this device -----
+                        std::string none = cb.player == 0 ? "None" : "Same As Player 1";
+                        action(none, [choose] { choose(""); }, [] {
+                            auto const& cfg = Bot::get().cfg;
+                            bool on = Clickbot::get().player == 0 ? cfg.clickPack.empty() : cfg.clickPack2.empty();
+                            return std::string(on ? "chosen" : "");
+                        });
+                        r.back().sep = true;
+
+                        for (auto const& pack : cb.packs()) {
+                            std::string id = pack.id;
+                            std::string label = shorten(pack.name, 26);
+                            std::string tag = pack.builtin ? "built-in" : "";
+                            r.push_back(MenuRow{
+                                label, nullptr, nullptr,
+                                [choose, id] { choose(id); },
+                                [usedBy, id, tag] {
+                                    auto u = usedBy(id);
+                                    if (u.empty()) return tag;
+                                    return tag.empty() ? u : u + " " + tag;
+                                }
+                            });
+                        }
+                        if (cb.packs().empty()) {
+                            r.push_back(MenuRow{"No packs yet, use Online", nullptr, nullptr, nullptr, nullptr});
+                        }
+
+                        action("Rescan Packs", [] { Clickbot::get().rescan(); });
+                        r.back().sep = true;
+                        action("Open Folder", [] {
+#if defined(GEODE_IS_MOBILE)
+                            auto path = Clickbot::get().userDir().string();
+                            Notification::create("Click packs: " + path, NotificationIcon::Info, 6.f)->show();
+                            Bot::get().status = "Folder path shown";
+#else
+                            geode::utils::file::openFolder(Clickbot::get().userDir());
+#endif
+                        });
+                    }
+                    else {
+                        // ----- ClickpackDB -----
+                        if (!cb.onlineLoaded() && !cb.onlineLoading() && cb.onlineError().empty()) cb.loadOnline(false);
+
+                        action("Reload List", [] { Clickbot::get().loadOnline(true); }, [] {
+                            auto& k = Clickbot::get();
+                            if (k.onlineLoading()) return std::string("loading...");
+                            if (!k.onlineError().empty()) return k.onlineError();
+                            return fmt::format("{} packs", k.online().size());
+                        });
+                        r.back().sep = true;
+
+                        r.push_back(MenuRow{"Filter", nullptr, nullptr, nullptr, [] {
+                            auto const& f = Clickbot::get().filter;
+                            return f.empty() ? std::string("(all)") : (f.size() > 18 ? f.substr(0, 18) : f);
+                        }});
+                        r.back().editTitle = "Filter the packs by name";
+                        r.back().textValue = [] { return Clickbot::get().filter; };
+                        r.back().textApply = [](std::string const& text) {
+                            auto& k = Clickbot::get();
+                            k.filter = text;
+                            k.touch();
+                        };
+
+                        std::string q = lower(cb.filter);
+                        constexpr size_t MAX_PACKS = 200;
+                        size_t matches = 0, shown = 0;
+                        for (auto const& pack : cb.online()) {
+                            if (!q.empty() && lower(pack.name).find(q) == std::string::npos) continue;
+                            ++matches;
+                            if (shown >= MAX_PACKS) continue;
+                            ++shown;
+
+                            OnlinePack entry = pack;
+                            std::string localId = "l:" + clickutil::folderName(pack.name);
+                            r.push_back(MenuRow{
+                                shorten(pack.name, 26), nullptr, nullptr,
+                                [entry, localId, choose] {
+                                    auto& k = Clickbot::get();
+                                    if (k.downloading(entry.name)) return;
+                                    if (k.installed(entry.name)) choose(localId); // already here: use it
+                                    else k.download(entry);                       // fetched into the local folder
+                                },
+                                [entry, usedBy, localId, sizeText] {
+                                    auto& k = Clickbot::get();
+                                    if (k.downloading(entry.name)) return std::string("downloading...");
+                                    if (k.installed(entry.name)) {
+                                        auto u = usedBy(localId);
+                                        return u.empty() ? std::string("installed") : u;
+                                    }
+                                    auto s = sizeText(entry.size);
+                                    return s.empty() ? std::string("download") : "download " + s;
+                                }
+                            });
+                        }
+                        if (cb.onlineLoaded() && matches == 0) {
+                            r.push_back(MenuRow{"No packs found", nullptr, nullptr, nullptr, nullptr});
+                        }
+                        else if (matches > shown) {
+                            r.push_back(MenuRow{fmt::format("+{} more, use the filter", matches - shown), nullptr, nullptr, nullptr, nullptr});
+                        }
+                    }
+                    break;
+                }
                 case 9: { // Search
                     if (b.mergePending) {
                         r.push_back(MenuRow{"Pick the macro to merge in", nullptr, nullptr, nullptr, nullptr});
                     }
 
+                    // Every macro that matches, newest first. The list scrolls.
                     auto hits = searchHits(b, query);
-                    constexpr size_t MAX_ROWS = 7;
-                    size_t shown = hits.size() > MAX_ROWS - 1 ? MAX_ROWS - 2 : hits.size();
-
-                    for (size_t k = 0; k < shown; ++k) macroRow(r, hits[k]);
+                    for (auto const& hit : hits) macroRow(r, hit);
 
                     if (hits.empty()) {
                         r.push_back(MenuRow{query.empty() ? "No macros yet" : "No macros found", nullptr, nullptr, nullptr, nullptr});
-                    }
-                    else if (hits.size() > MAX_ROWS - 1) {
-                        r.push_back(MenuRow{fmt::format("+{} more, keep typing", hits.size() - shown), nullptr, nullptr, nullptr, nullptr});
                     }
                     break;
                 }
@@ -1287,7 +1445,8 @@ namespace ivey {
         auto& bot = Bot::get();
         return fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", m_tab, m_query, bot.files.size(), bot.cfg.accent, bot.cfg.opacity,
                            bot.cfg.fx, bot.cfg.fxTop, bot.cfg.devMode, bot.cfg.fxTopPct, m_searchOpen, bot.macro.entries.empty(), bot.mergePending) +
-               (Renderer::get().active() ? "|r" : "|-") + (Renderer::get().available() ? "a" : "x");
+               (Renderer::get().active() ? "|r" : "|-") + (Renderer::get().available() ? "a" : "x") +
+               fmt::format("|c{}", Clickbot::get().revision());
     }
 
     // Rebuilds happen on the next frame, never inside the tap that asked for them.
