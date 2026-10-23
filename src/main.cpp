@@ -21,6 +21,7 @@
 #include "bot/Trajectory.hpp"
 #include "bot/Assist.hpp"
 #include "render/Renderer.hpp"
+#include "clickbot/Clickbot.hpp"
 #include "ui/IveyMenu.hpp"
 
 // Built-in copy of resources/ivey-menu.png, used if the resource file can't be found.
@@ -928,6 +929,7 @@ class $modify(IveyGameLayer, GJBaseGameLayer) {
         }
 
         GJBaseGameLayer::handleButton(down, button, isPlayer1);
+        Clickbot::get().onInput(this, down, isPlayer1); // click sound, a macro's clicks are heard too
 
         // Swift Clicks: extra release + press pairs inside the same frame.
         // A replay already contains them, so it never adds more.
